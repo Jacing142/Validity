@@ -52,7 +52,7 @@ async def _execute_all_queries(
     return all_results
 
 
-def search_node(state: VerificationState) -> dict:
+async def search_node(state: VerificationState) -> dict:
     """Node 4: Execute all search queries concurrently, tag with intent and claim_id."""
     run_id = state.get("run_id", "unknown")
     logger.info(f"[{run_id}] [search] Entering node")
@@ -69,14 +69,7 @@ def search_node(state: VerificationState) -> dict:
 
         logger.info(f"[{run_id}] [search] Executing {len(queries)} queries concurrently")
 
-        # LangGraph nodes are sync, so we run async code with asyncio
-        loop = asyncio.new_event_loop()
-        try:
-            all_results = loop.run_until_complete(
-                _execute_all_queries(search_client, queries, num_results)
-            )
-        finally:
-            loop.close()
+        all_results = await _execute_all_queries(search_client, queries, num_results)
 
         # Deduplicate by URL within each claim
         by_claim: dict[str, list[dict]] = defaultdict(list)

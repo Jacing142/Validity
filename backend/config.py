@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     # LLM
-    LLM_PROVIDER: Literal["openai", "anthropic"] = "openai"
+    LLM_PROVIDER: Literal["openai", "anthropic", "mock"] = "openai"
     LLM_API_KEY: str = ""
     LLM_MODEL_COMPLEX: str = "gpt-4o"
     LLM_MODEL_STANDARD: str = "gpt-4o-mini"
@@ -50,6 +50,11 @@ def get_llm(complexity: str = "standard"):
         from langchain_anthropic import ChatAnthropic
 
         return ChatAnthropic(model=model, api_key=settings.LLM_API_KEY, temperature=0)
+
+    elif settings.LLM_PROVIDER == "mock":
+        from backend.llm.mock import MockChatModel
+
+        return MockChatModel()
 
     else:
         raise ValueError(f"Unsupported LLM provider: {settings.LLM_PROVIDER}")

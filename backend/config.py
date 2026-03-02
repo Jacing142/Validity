@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     LLM_MODEL_STANDARD: str = "gpt-4o-mini"
 
     # Search
-    SEARCH_PROVIDER: Literal["serper", "tavily", "you"] = "serper"
+    SEARCH_PROVIDER: Literal["serper", "tavily", "you", "mock"] = "serper"
     SEARCH_API_KEY: str = ""
 
     # Application
@@ -71,6 +71,11 @@ def get_search_client():
         from backend.search.you import YouSearchClient
 
         return YouSearchClient()
+
+    elif settings.SEARCH_PROVIDER == "mock":
+        from backend.search.mock import MockSearchClient
+
+        return MockSearchClient()
 
     else:
         raise ValueError(f"Unsupported search provider: {settings.SEARCH_PROVIDER}")

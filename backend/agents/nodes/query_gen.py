@@ -7,6 +7,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.config import get_llm
 from backend.agents.state import VerificationState
+from backend.agents.callbacks import get as get_callback
 
 logger = logging.getLogger(__name__)
 
@@ -47,12 +48,24 @@ def query_gen_node(state: VerificationState) -> dict:
     run_id = state.get("run_id", "unknown")
     logger.info(f"[{run_id}] [query_gen] Entering node")
     start = time.time()
+    cb = get_callback(run_id)
 
     try:
         approved_claims = state.get("approved_claims", [])
         if not approved_claims:
             logger.warning(f"[{run_id}] [query_gen] No approved claims to generate queries for")
             return {"search_queries": []}
+
+        if cb:
+            for claim in approved_claims:
+                claim_preview = claim["text"][:80] + "..." if len(claim["text"]) > 80 else claim["text"]
+                cb.emit({
+                    "type": "node_event",
+                    "node": "query_gen",
+                    "status": "running",
+                    "detail": f"Generating search queries for: \"{claim_preview}\"",
+                    "data": {"claim_id": claim["id"]},
+                })
 
         llm = get_llm(complexity="standard")
 
@@ -84,15 +97,32 @@ def query_gen_node(state: VerificationState) -> dict:
         elapsed = time.time() - start
         affirm_count = sum(1 for q in queries if q.get("intent") == "affirm")
         refute_count = sum(1 for q in queries if q.get("intent") == "refute")
+        num_claims = len(approved_claims)
         logger.info(
             f"[{run_id}] [query_gen] Generated {len(queries)} queries "
             f"({affirm_count} affirm, {refute_count} refute) in {elapsed:.2f}s"
         )
 
+        if cb:
+            cb.emit({
+                "type": "node_event",
+                "node": "query_gen",
+                "status": "completed",
+                "detail": f"Generated {affirm_count} affirm + {refute_count} refute queries for {num_claims} claim{'s' if num_claims != 1 else ''}",
+                "data": {"total": len(queries), "affirm": affirm_count, "refute": refute_count},
+            })
+
         return {"search_queries": queries}
 
     except Exception as e:
         logger.exception(f"[{run_id}] [query_gen] Failed")
+        if cb:
+            cb.emit({
+                "type": "node_event",
+                "node": "query_gen",
+                "status": "error",
+                "detail": f"Query generation failed: {str(e)}",
+            })
         errors = list(state.get("errors", []))
         errors.append(f"query_gen: {str(e)}")
         return {"search_queries": [], "errors": errors}

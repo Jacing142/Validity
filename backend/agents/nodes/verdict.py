@@ -7,6 +7,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.config import get_llm
 from backend.agents.state import VerificationState
+from backend.agents.callbacks import get as get_callback
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,15 @@ def verdict_node(state: VerificationState) -> dict:
     run_id = state.get("run_id", "unknown")
     logger.info(f"[{run_id}] [verdict] Entering node")
     start = time.time()
+    cb = get_callback(run_id)
+
+    if cb:
+        cb.emit({
+            "type": "node_event",
+            "node": "verdict",
+            "status": "running",
+            "detail": "Assigning verdicts based on evidence...",
+        })
 
     try:
         evidence_assessments = state.get("evidence_assessments", [])
@@ -64,6 +74,16 @@ def verdict_node(state: VerificationState) -> dict:
             claim_text = claim["text"]
             assessments = evidence_by_claim.get(claim_id, [])
             sources = sources_by_claim.get(claim_id, [])
+
+            if cb:
+                claim_preview = claim_text[:80] + "..." if len(claim_text) > 80 else claim_text
+                cb.emit({
+                    "type": "node_event",
+                    "node": "verdict",
+                    "status": "running",
+                    "detail": f"Assigning verdict for: \"{claim_preview}\"",
+                    "data": {"claim_id": claim_id},
+                })
 
             # Summarise evidence for the LLM
             evidence_summary = []
@@ -125,6 +145,15 @@ def verdict_node(state: VerificationState) -> dict:
                 f"[{run_id}] [verdict] Claim '{claim_text[:50]}...' -> {verdict} ({confidence:.2f})"
             )
 
+            if cb:
+                cb.emit({
+                    "type": "node_event",
+                    "node": "verdict",
+                    "status": "completed",
+                    "detail": f"Verdict: {verdict.upper()} (confidence: {confidence:.0%})",
+                    "data": {"claim_id": claim_id, "verdict": verdict, "confidence": confidence},
+                })
+
         elapsed = time.time() - start
         logger.info(
             f"[{run_id}] [verdict] Assigned verdicts for {len(claim_verdicts)} claims in {elapsed:.2f}s"
@@ -134,6 +163,13 @@ def verdict_node(state: VerificationState) -> dict:
 
     except Exception as e:
         logger.exception(f"[{run_id}] [verdict] Failed")
+        if cb:
+            cb.emit({
+                "type": "node_event",
+                "node": "verdict",
+                "status": "error",
+                "detail": f"Verdict assignment failed: {str(e)}",
+            })
         errors = list(state.get("errors", []))
         errors.append(f"verdict: {str(e)}")
         return {"claim_verdicts": [], "errors": errors}

@@ -6,6 +6,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.config import get_llm, settings
 from backend.agents.state import VerificationState
+from backend.agents.callbacks import get as get_callback
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,15 @@ def rank_node(state: VerificationState) -> dict:
     run_id = state.get("run_id", "unknown")
     logger.info(f"[{run_id}] [rank] Entering node")
     start = time.time()
+    cb = get_callback(run_id)
+
+    if cb:
+        cb.emit({
+            "type": "node_event",
+            "node": "rank",
+            "status": "running",
+            "detail": "Ranking claims by verifiability and importance...",
+        })
 
     try:
         claims = state.get("claims", [])
@@ -92,12 +102,28 @@ def rank_node(state: VerificationState) -> dict:
             f"[{run_id}] [rank] Ranked {len(claims)} claims, selected top {len(top_claims)} in {elapsed:.2f}s"
         )
 
+        if cb:
+            cb.emit({
+                "type": "node_event",
+                "node": "rank",
+                "status": "completed",
+                "detail": f"Selected top {len(top_claims)} claim{'s' if len(top_claims) != 1 else ''} for verification",
+                "data": {"selected": [c["text"] for c in top_claims]},
+            })
+
         # approved_claims == ranked_claims in Phase 1
         # TODO Phase 3: Insert HITL interrupt between rank and query_gen
         return {"ranked_claims": top_claims, "approved_claims": top_claims}
 
     except Exception as e:
         logger.exception(f"[{run_id}] [rank] Failed")
+        if cb:
+            cb.emit({
+                "type": "node_event",
+                "node": "rank",
+                "status": "error",
+                "detail": f"Ranking failed: {str(e)}",
+            })
         errors = list(state.get("errors", []))
         errors.append(f"rank: {str(e)}")
         # Fall back to original order, capped at MAX_CLAIMS

@@ -7,6 +7,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.config import get_llm
 from backend.agents.state import VerificationState
+from backend.agents.callbacks import get as get_callback
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,15 @@ def decompose_node(state: VerificationState) -> dict:
     run_id = state.get("run_id", "unknown")
     logger.info(f"[{run_id}] [decompose] Entering node")
     start = time.time()
+    cb = get_callback(run_id)
+
+    if cb:
+        cb.emit({
+            "type": "node_event",
+            "node": "decompose",
+            "status": "running",
+            "detail": "Analyzing input text for factual claims...",
+        })
 
     try:
         llm = get_llm(complexity="high")
@@ -69,10 +79,27 @@ def decompose_node(state: VerificationState) -> dict:
 
         elapsed = time.time() - start
         logger.info(f"[{run_id}] [decompose] Extracted {len(claims)} claims in {elapsed:.2f}s")
+
+        if cb:
+            cb.emit({
+                "type": "node_event",
+                "node": "decompose",
+                "status": "completed",
+                "detail": f"Found {len(claims)} atomic claim{'s' if len(claims) != 1 else ''} in the input",
+                "data": {"claims": [c["text"] for c in claims]},
+            })
+
         return {"claims": claims}
 
     except Exception as e:
         logger.exception(f"[{run_id}] [decompose] Failed")
+        if cb:
+            cb.emit({
+                "type": "node_event",
+                "node": "decompose",
+                "status": "error",
+                "detail": f"Decomposition failed: {str(e)}",
+            })
         errors = list(state.get("errors", []))
         errors.append(f"decompose: {str(e)}")
         return {"claims": [], "errors": errors}

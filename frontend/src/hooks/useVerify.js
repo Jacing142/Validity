@@ -5,13 +5,13 @@ import { useState, useRef, useCallback } from 'react'
  *
  * Returns:
  *   submitText(text)  — starts a verification run
- *   status            — "idle" | "running" | "completed" | "error"
+ *   status            — "idle" | "running" | "hitl" | "completed" | "error"
  *   events            — array of streaming events (for ThoughtPanel)
  *   verdict           — final OverallVerdict object, null until complete
  *   error             — error string, null if none
  *   runId             — current run UUID, null if idle
- *   hitlClaims        — Phase 3: claims from HITL request (null in Phase 2)
- *   submitHitl(list)  — Phase 3: send approved claims back (no-op in Phase 2)
+ *   hitlClaims        — non-null while HITL modal should be shown
+ *   submitHitl(list)  — send approved claims back over the WebSocket
  */
 export function useVerify() {
   const [status, setStatus] = useState('idle')
@@ -83,19 +83,33 @@ export function useVerify() {
         return
       }
 
-      setEvents((prev) => [...prev, event])
-
       if (event.type === 'pipeline_complete') {
+        setEvents((prev) => [...prev, event])
         setVerdict(event.data || null)
         setStatus('completed')
         ws.close()
       } else if (event.type === 'pipeline_error') {
+        setEvents((prev) => [...prev, event])
         setError(event.detail || 'Unknown pipeline error')
         setStatus('error')
         ws.close()
       } else if (event.type === 'hitl_request') {
-        // Phase 3: populate HITL claims
+        // Phase 3: pipeline paused — show HITL modal.
+        // Add a synthetic ThoughtPanel event so the user sees the pause.
+        const pauseEvent = {
+          type: 'node_event',
+          node: 'hitl',
+          status: 'waiting',
+          detail: `Waiting for your review of ${event.data?.claims?.length ?? 0} claims...`,
+          timestamp: event.timestamp,
+          run_id: event.run_id,
+        }
+        setEvents((prev) => [...prev, pauseEvent])
         setHitlClaims(event.data?.claims || [])
+        setStatus('hitl')
+      } else {
+        // Normal node event — push to ThoughtPanel stream
+        setEvents((prev) => [...prev, event])
       }
     }
 
@@ -105,19 +119,16 @@ export function useVerify() {
       setStatus('error')
     }
 
-    ws.onclose = (evt) => {
+    ws.onclose = () => {
       if (currentRunRef.current !== newRunId) return
-      // If we closed while still running, it's an unexpected disconnect
-      if (status === 'running') {
-        // Check if we already have a terminal status from onmessage
-        setStatus((prev) => {
-          if (prev === 'running') {
-            setError('Connection closed unexpectedly. Try again.')
-            return 'error'
-          }
-          return prev
-        })
-      }
+      // If we closed while still running/hitl, it's an unexpected disconnect
+      setStatus((prev) => {
+        if (prev === 'running' || prev === 'hitl') {
+          setError('Connection closed unexpectedly. Try again.')
+          return 'error'
+        }
+        return prev
+      })
     }
   }, [])
 
@@ -128,7 +139,8 @@ export function useVerify() {
         type: 'hitl_response',
         approved_claims: approvedClaims,
       }))
-      setHitlClaims(null)
+      setHitlClaims(null)   // Close the modal
+      setStatus('running')  // Resume running state in UI
     }
   }, [])
 

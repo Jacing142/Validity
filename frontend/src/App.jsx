@@ -3,11 +3,10 @@ import { useVerify } from './hooks/useVerify'
 import InputPanel from './components/InputPanel'
 import ThoughtPanel from './components/ThoughtPanel'
 import VerdictPanel from './components/VerdictPanel'
-// ClaimModal is imported but not rendered in Phase 2
-// import ClaimModal from './components/ClaimModal'
+import ClaimModal from './components/ClaimModal'
 
 export default function App() {
-  const { submitText, status, events, verdict, error } = useVerify()
+  const { submitText, status, events, verdict, error, hitlClaims, submitHitl } = useVerify()
 
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col">
@@ -44,16 +43,15 @@ export default function App() {
         </div>
       </main>
 
-      {/*
-        Phase 3: Render ClaimModal when hitlClaims is populated
+      {/* Phase 3: HITL claim review modal — rendered when pipeline pauses for user input */}
+      {hitlClaims && (
         <ClaimModal
           isOpen={!!hitlClaims}
-          claims={hitlClaims || []}
+          claims={hitlClaims}
           onConfirm={submitHitl}
-          onClose={() => {}}
+          onClose={() => submitHitl(hitlClaims)}
         />
-      */}
+      )}
     </div>
   )
 }
-

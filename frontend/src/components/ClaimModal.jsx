@@ -4,16 +4,11 @@ import { X, Plus, CheckSquare, Square, AlertCircle } from 'lucide-react'
 /**
  * ClaimModal — Phase 3 HITL claim review modal.
  *
- * Built as a UI component for Phase 3. NOT connected to the pipeline in Phase 2.
- * The modal is never rendered in the normal Phase 2 flow.
- *
  * Props:
- *   claims     — array of { id, text, importance_score } objects
- *   onConfirm  — (approvedClaims: array) => void
- *   onClose    — () => void
+ *   claims     — array of { id, text, importance_score } objects from hitl_request
+ *   onConfirm  — (approvedClaims: array) => void  — called with full claim objects
+ *   onClose    — () => void — called when X or Cancel is clicked (auto-approves all)
  *   isOpen     — boolean
- *
- * TODO: Wire to useVerify's hitlClaims / submitHitl in Phase 3.
  */
 export default function ClaimModal({ claims = [], onConfirm, onClose, isOpen }) {
   const [checked, setChecked] = useState(() =>
@@ -30,9 +25,11 @@ export default function ClaimModal({ claims = [], onConfirm, onClose, isOpen }) 
 
   function addCustom() {
     const trimmed = customText.trim()
-    if (!trimmed) return
-    const id = `custom-${Date.now()}`
-    setCustomClaims((prev) => [...prev, { id, text: trimmed, importance_score: 0.5 }])
+    if (!trimmed || trimmed.length > 500) return
+    // Use crypto.randomUUID() for a proper UUID; importance_score 1.0 because
+    // the user explicitly added this claim and wants it verified.
+    const id = crypto.randomUUID()
+    setCustomClaims((prev) => [...prev, { id, text: trimmed, importance_score: 1.0 }])
     setChecked((prev) => ({ ...prev, [id]: true }))
     setCustomText('')
   }
@@ -49,7 +46,7 @@ export default function ClaimModal({ claims = [], onConfirm, onClose, isOpen }) 
   const approvedCount = allClaims.filter((c) => checked[c.id]).length
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in">
       {/* Backdrop */}
       <div
         className="absolute inset-0 bg-black/50 backdrop-blur-sm"
@@ -70,6 +67,7 @@ export default function ClaimModal({ claims = [], onConfirm, onClose, isOpen }) 
           <button
             onClick={onClose}
             className="text-gray-400 hover:text-gray-600 ml-4 flex-shrink-0"
+            title="Cancel (auto-approves all claims)"
           >
             <X size={20} />
           </button>
@@ -86,7 +84,7 @@ export default function ClaimModal({ claims = [], onConfirm, onClose, isOpen }) 
 
           {allClaims.map((claim) => {
             const isChecked = !!checked[claim.id]
-            const isCustom = claim.id.startsWith('custom-')
+            const isCustom = !claims.some((c) => c.id === claim.id)
             return (
               <div
                 key={claim.id}
@@ -105,13 +103,14 @@ export default function ClaimModal({ claims = [], onConfirm, onClose, isOpen }) 
                 </span>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm text-gray-800 leading-relaxed">{claim.text}</p>
-                  {!isCustom && (
+                  {isCustom ? (
+                    <span className="inline-block text-[11px] text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded mt-1 font-medium">
+                      Custom
+                    </span>
+                  ) : (
                     <p className="text-[11px] text-gray-400 mt-0.5">
                       Importance: {Math.round(claim.importance_score * 100)}%
                     </p>
-                  )}
-                  {isCustom && (
-                    <p className="text-[11px] text-blue-500 mt-0.5 font-medium">Custom claim</p>
                   )}
                 </div>
               </div>
@@ -128,11 +127,13 @@ export default function ClaimModal({ claims = [], onConfirm, onClose, isOpen }) 
               onChange={(e) => setCustomText(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && addCustom()}
               placeholder="Add a claim the AI missed…"
+              maxLength={500}
               className="flex-1 text-sm px-3 py-2 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
             <button
               onClick={addCustom}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-sm font-medium text-gray-700 transition-colors"
+              disabled={!customText.trim()}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium text-gray-700 transition-colors"
             >
               <Plus size={15} />
               Add
@@ -155,6 +156,7 @@ export default function ClaimModal({ claims = [], onConfirm, onClose, isOpen }) 
             <button
               onClick={handleConfirm}
               disabled={approvedCount === 0}
+              title={approvedCount === 0 ? 'Select at least one claim to verify' : ''}
               className={`px-4 py-2 rounded-lg text-sm font-semibold text-white transition-colors ${
                 approvedCount === 0
                   ? 'bg-blue-300 cursor-not-allowed'

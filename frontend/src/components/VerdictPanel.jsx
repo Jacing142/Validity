@@ -180,6 +180,15 @@ export default function VerdictPanel({ verdict, status, error }) {
     )
   }
 
+  if (status === 'hitl') {
+    return (
+      <div className="flex items-center gap-2 text-sm text-gray-500 px-1 py-4">
+        <Loader2 size={16} className="animate-spin text-amber-500" />
+        Reviewing claims — pipeline paused…
+      </div>
+    )
+  }
+
   if (status === 'error') {
     return (
       <div className="rounded-lg border border-red-200 bg-red-50 p-4 flex items-start gap-3">

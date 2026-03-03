@@ -12,7 +12,8 @@ export default function InputPanel({ onSubmit, status }) {
   const [text, setText] = useState('')
   const [validationError, setValidationError] = useState('')
 
-  const isRunning = status === 'running'
+  // Disable input while pipeline is running OR paused at HITL review
+  const isRunning = status === 'running' || status === 'hitl'
 
   function handleSubmit(e) {
     e.preventDefault()

@@ -11,12 +11,13 @@ from backend.models import OverallVerdict, VerifyRequest, VerifyResponse
 from backend.agents.callbacks import (
     StreamingCallbackHandler,
     register as register_callback,
+    get as get_callback,
     unregister as unregister_callback,
 )
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Validity API", version="2.0.0")
+app = FastAPI(title="Validity API", version="3.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -30,14 +31,22 @@ app.add_middleware(
 # In-memory run store
 # ---------------------------------------------------------------------------
 # Each entry: { run_id, status, queue, result, error }
-# Intentionally simple — single-process, no persistence needed for Phase 2.
+# Intentionally simple — single-process, no persistence needed for Phase 3.
 runs: dict[str, dict] = {}
 
 _SENTINEL = object()  # Signals pipeline completion on the queue
 
 
-async def _run_pipeline(run_id: str, text: str) -> None:
-    """Background task: runs the verification pipeline and pushes events via queue."""
+async def _run_pipeline(run_id: str, text: str, enable_hitl: bool = True) -> None:
+    """Background task: runs the verification pipeline and pushes events via queue.
+
+    Args:
+        run_id:      Unique identifier for this run.
+        text:        Input text to verify.
+        enable_hitl: When True (async/WebSocket path), creates an asyncio.Event
+                     on the callback so the hitl node can pause and wait for user
+                     input. When False (sync endpoint), HITL is skipped.
+    """
     run = runs.get(run_id)
     if run is None:
         logger.error(f"[{run_id}] run not found in store")
@@ -46,6 +55,13 @@ async def _run_pipeline(run_id: str, text: str) -> None:
     queue: asyncio.Queue = run["queue"]
     loop = asyncio.get_event_loop()
     cb = StreamingCallbackHandler(queue=queue, run_id=run_id, loop=loop)
+
+    if enable_hitl:
+        # Phase 3: attach HITL coordination objects to the callback.
+        # The hitl node reads cb.hitl_event; the WebSocket handler sets it.
+        cb.hitl_event = asyncio.Event()
+        cb.hitl_response = {}
+
     register_callback(run_id, cb)
 
     try:
@@ -85,15 +101,21 @@ async def _run_pipeline(run_id: str, text: str) -> None:
         runs[run_id]["status"] = "completed"
         runs[run_id]["result"] = verdict_dict
 
+        # Build a meaningful detail message for the no-claims case
+        if verdict.total_claims == 0:
+            detail = "No claims were selected for verification."
+        else:
+            detail = f"Verification complete — overall verdict: {verdict.verdict.upper()}"
+
         await cb.aemit({
             "type": "pipeline_complete",
             "node": "pipeline",
             "status": "completed",
-            "detail": f"Verification complete — overall verdict: {verdict.verdict.upper()}",
+            "detail": detail,
             "data": verdict_dict,
         })
 
-        logger.info(f"[{run_id}] Pipeline complete — verdict: {verdict.verdict}")
+        logger.info(f"[{run_id}] Pipeline complete — verdict: {verdict.verdict} ({verdict.total_claims} claims)")
 
     except Exception as exc:
         logger.exception(f"[{run_id}] Pipeline failed")
@@ -138,12 +160,13 @@ async def verify(request: VerifyRequest, sync: bool = False):
     - Default (async): returns {run_id, status: "running"} immediately.
       Connect to WS /api/verify/{run_id}/stream for live events.
     - ?sync=true: runs synchronously (Phase 1 behaviour) and returns full verdict.
+      HITL is automatically skipped in sync mode — approved_claims = ranked_claims.
     """
     run_id = str(uuid.uuid4())
     logger.info(f"[{run_id}] Received verify request ({len(request.text)} chars), sync={sync}")
 
     if sync:
-        # --- Phase 1 synchronous fallback ---
+        # --- Phase 1 synchronous fallback — no HITL ---
         try:
             from backend.agents.graph import verification_graph
 
@@ -162,6 +185,7 @@ async def verify(request: VerifyRequest, sync: bool = False):
                 "errors": [],
             }
 
+            # No callback registered → hitl_node sees cb=None → auto-approves
             final_state = await verification_graph.ainvoke(initial_state)
 
             overall = final_state.get("overall_verdict")
@@ -180,7 +204,7 @@ async def verify(request: VerifyRequest, sync: bool = False):
             logger.exception(f"[{run_id}] Sync verification failed")
             return VerifyResponse(run_id=run_id, status="error", error=str(e))
 
-    # --- Async path: launch background task ---
+    # --- Async path: launch background task with HITL enabled ---
     queue: asyncio.Queue = asyncio.Queue()
     runs[run_id] = {
         "run_id": run_id,
@@ -190,22 +214,29 @@ async def verify(request: VerifyRequest, sync: bool = False):
         "error": None,
     }
 
-    asyncio.create_task(_run_pipeline(run_id, request.text))
+    asyncio.create_task(_run_pipeline(run_id, request.text, enable_hitl=True))
 
     return {"run_id": run_id, "status": "running"}
 
 
 # ---------------------------------------------------------------------------
-# WS /api/verify/{run_id}/stream
+# WS /api/verify/{run_id}/stream  (Phase 3: bidirectional)
 # ---------------------------------------------------------------------------
 
 @app.websocket("/api/verify/{run_id}/stream")
 async def stream_run(websocket: WebSocket, run_id: str):
-    """Stream verification events to the client over WebSocket.
+    """Bidirectional WebSocket for verification event streaming and HITL responses.
 
-    - If the run is still executing, events arrive as they fire.
-    - If the run is already complete, immediately sends the cached result and closes.
-    - If the run_id is unknown, closes with an error.
+    Server → Client: node events, hitl_request, pipeline_complete / pipeline_error
+    Client → Server: hitl_response { type, approved_claims }
+
+    Phase 3 flow:
+        1. Events stream for decompose and rank nodes.
+        2. Server sends hitl_request with ranked claims.
+        3. Client shows modal, user reviews, client sends hitl_response.
+        4. Server wakes up hitl node, pipeline resumes.
+        5. Events stream for remaining nodes.
+        6. Server sends pipeline_complete.
     """
     await websocket.accept()
 
@@ -242,22 +273,57 @@ async def stream_run(websocket: WebSocket, run_id: str):
         await websocket.close()
         return
 
-    # Stream events from the queue
+    # --- Bidirectional streaming ---
     queue: asyncio.Queue = run["queue"]
-    try:
+
+    async def send_events() -> None:
+        """Read events from the pipeline queue and send them to the client."""
         while True:
             item = await queue.get()
             if item is _SENTINEL:
-                break
+                return
             await websocket.send_json(item)
-
-            # Terminal events — close after sending
             if item.get("type") in ("pipeline_complete", "pipeline_error"):
-                break
+                return
 
+    async def receive_messages() -> None:
+        """Listen for incoming client messages (primarily hitl_response)."""
+        while True:
+            try:
+                raw = await websocket.receive_text()
+            except WebSocketDisconnect:
+                logger.info(f"[{run_id}] WebSocket client disconnected")
+                # If pipeline is paused at HITL, it will auto-approve after timeout.
+                return
+            except Exception as exc:
+                logger.warning(f"[{run_id}] WebSocket receive error: {exc}")
+                return
+
+            try:
+                message = json.loads(raw)
+            except json.JSONDecodeError:
+                logger.warning(f"[{run_id}] Received non-JSON message — ignoring")
+                continue
+
+            if message.get("type") == "hitl_response":
+                _handle_hitl_response(run_id, message)
+
+    send_task = asyncio.create_task(send_events())
+    recv_task = asyncio.create_task(receive_messages())
+
+    try:
+        done, pending = await asyncio.wait(
+            [send_task, recv_task],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
     except WebSocketDisconnect:
-        # Client disconnected — pipeline continues, events are discarded
-        logger.info(f"[{run_id}] WebSocket client disconnected mid-stream")
+        logger.info(f"[{run_id}] WebSocket disconnected during gather")
     except Exception as exc:
         logger.warning(f"[{run_id}] WebSocket stream error: {exc}")
     finally:
@@ -265,6 +331,39 @@ async def stream_run(websocket: WebSocket, run_id: str):
             await websocket.close()
         except Exception:
             pass
+
+
+def _handle_hitl_response(run_id: str, message: dict) -> None:
+    """Process a hitl_response message from the client.
+
+    Validates the approved_claims list, writes it to the callback's hitl_response
+    dict, and sets the hitl_event to wake the paused hitl node.
+    """
+    cb = get_callback(run_id)
+    if cb is None or cb.hitl_event is None:
+        logger.warning(f"[{run_id}] Received hitl_response but no HITL event registered — ignoring")
+        return
+
+    raw_claims = message.get("approved_claims", [])
+    validated: list[dict] = []
+
+    for claim in raw_claims:
+        if not isinstance(claim, dict):
+            continue
+        text = str(claim.get("text", "")).strip()
+        if not text or len(text) > 500:
+            logger.warning(f"[{run_id}] Skipping invalid claim from client: {claim!r}")
+            continue
+        claim = dict(claim)
+        if not claim.get("id"):
+            claim["id"] = str(uuid.uuid4())
+        if "importance_score" not in claim:
+            claim["importance_score"] = 1.0
+        validated.append(claim)
+
+    cb.hitl_response["approved_claims"] = validated
+    cb.hitl_event.set()
+    logger.info(f"[{run_id}] HITL response received — {len(validated)} approved claims, event set")
 
 
 # ---------------------------------------------------------------------------

@@ -111,9 +111,8 @@ def rank_node(state: VerificationState) -> dict:
                 "data": {"selected": [c["text"] for c in top_claims]},
             })
 
-        # approved_claims == ranked_claims in Phase 1
-        # TODO Phase 3: Insert HITL interrupt between rank and query_gen
-        return {"ranked_claims": top_claims, "approved_claims": top_claims}
+        # Phase 3: approved_claims is set by the hitl node (not here).
+        return {"ranked_claims": top_claims}
 
     except Exception as e:
         logger.exception(f"[{run_id}] [rank] Failed")
@@ -128,4 +127,4 @@ def rank_node(state: VerificationState) -> dict:
         errors.append(f"rank: {str(e)}")
         # Fall back to original order, capped at MAX_CLAIMS
         fallback = state.get("claims", [])[: settings.MAX_CLAIMS]
-        return {"ranked_claims": fallback, "approved_claims": fallback, "errors": errors}
+        return {"ranked_claims": fallback, "errors": errors}

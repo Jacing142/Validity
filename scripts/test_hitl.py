@@ -9,21 +9,18 @@ Tests:
 
 Usage:
   cd /path/to/Validity
-  python -m scripts.test_hitl
-  # or
-  python scripts/test_hitl.py
+  LLM_PROVIDER=mock SEARCH_PROVIDER=mock python scripts/test_hitl.py
 
-Requires a running .env with valid LLM_API_KEY and SEARCH_API_KEY.
+Requires a running .env with valid LLM_API_KEY and SEARCH_API_KEY,
+OR set LLM_PROVIDER=mock SEARCH_PROVIDER=mock for offline testing.
 """
 
 import asyncio
-import json
 import logging
 import uuid
 import sys
 import os
 
-# Make sure the repo root is on the path when run directly
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -46,9 +43,7 @@ async def run_test():
     loop = asyncio.get_event_loop()
     queue: asyncio.Queue = asyncio.Queue()
 
-    # -----------------------------------------------------------------------
     # Set up callback with HITL coordination objects
-    # -----------------------------------------------------------------------
     cb = StreamingCallbackHandler(queue=queue, run_id=run_id, loop=loop)
     cb.hitl_event = asyncio.Event()
     cb.hitl_response = {}
@@ -69,13 +64,22 @@ async def run_test():
         "errors": [],
     }
 
-    # -----------------------------------------------------------------------
-    # Simulate the user: wait until hitl_request arrives, then respond
-    # -----------------------------------------------------------------------
-    async def simulate_user():
-        ranked_claims = None
-        while True:
-            event = await queue.get()
+    print(f"\n{'='*60}")
+    print(f"HITL Integration Test — run_id: {run_id}")
+    print(f"Input: {TEST_TEXT[:80]}...")
+    print(f"{'='*60}\n")
+
+    removed_claim_text = None
+
+    async def monitor_queue(stop_event: asyncio.Event):
+        """Drain the event queue, print events, handle HITL request."""
+        nonlocal removed_claim_text
+        while not stop_event.is_set():
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=0.2)
+            except asyncio.TimeoutError:
+                continue
+
             ev_type = event.get("type", "")
             node = event.get("node", "system")
             detail = event.get("detail", "")
@@ -85,9 +89,10 @@ async def run_test():
                 ranked_claims = event["data"]["claims"]
                 print(f"\n  --- HITL REQUEST: received {len(ranked_claims)} claims ---")
                 for i, c in enumerate(ranked_claims):
-                    print(f"  [{i+1}] {c['text']} (score={c.get('importance_score', '?'):.2f})")
+                    print(f"  [{i+1}] {c['text']} (score={c.get('importance_score', '?')})")
 
                 # Remove the last claim, add a custom claim
+                removed_claim_text = ranked_claims[-1]["text"] if ranked_claims else None
                 approved = ranked_claims[:-1]
                 custom_claim = {
                     "id": f"custom-{uuid.uuid4().hex[:8]}",
@@ -97,77 +102,70 @@ async def run_test():
                 approved.append(custom_claim)
 
                 print(f"\n  --- HITL RESPONSE: approving {len(approved)} claims ---")
-                print(f"      Removed: '{ranked_claims[-1]['text']}'")
+                if removed_claim_text:
+                    print(f"      Removed: '{removed_claim_text}'")
                 print(f"      Added:   '{custom_claim['text']}'")
 
                 cb.hitl_response["approved_claims"] = approved
                 cb.hitl_event.set()
+                print()
 
-            if ev_type in ("pipeline_complete", "pipeline_error"):
-                print(f"\n  [{node}] {detail}")
-                return event
+    # Run graph and queue monitor concurrently
+    stop_monitor = asyncio.Event()
+    monitor_task = asyncio.create_task(monitor_queue(stop_monitor))
 
-    # -----------------------------------------------------------------------
-    # Run graph and user simulation concurrently
-    # -----------------------------------------------------------------------
-    print(f"\n{'='*60}")
-    print(f"HITL Integration Test — run_id: {run_id}")
-    print(f"Input: {TEST_TEXT[:80]}...")
-    print(f"{'='*60}\n")
-
-    final_event, _ = await asyncio.gather(
-        simulate_user(),
-        verification_graph.ainvoke(initial_state),
-    )
+    try:
+        final_state = await verification_graph.ainvoke(initial_state)
+    finally:
+        stop_monitor.set()
+        await monitor_task
 
     unregister(run_id)
 
-    # -----------------------------------------------------------------------
-    # Assertions
-    # -----------------------------------------------------------------------
+    # Assertions on final_state
     print(f"\n{'='*60}")
     print("TEST RESULTS")
     print(f"{'='*60}")
 
-    if final_event.get("type") == "pipeline_error":
-        print(f"FAIL: Pipeline error — {final_event.get('detail')}")
+    overall = final_state.get("overall_verdict")
+    if overall is None:
+        print("FAIL: overall_verdict is None — pipeline did not complete")
         return False
 
-    result = final_event.get("data", {})
-    total = result.get("total_claims", 0)
-    verdicts = result.get("claim_verdicts", [])
+    verdicts = overall.get("claim_verdicts", [])
+    total = overall.get("total_claims", 0)
+    claim_texts = [cv["claim_text"] for cv in verdicts]
 
-    print(f"Overall verdict: {result.get('verdict', '?').upper()}")
+    print(f"Overall verdict: {overall.get('verdict', '?').upper()}")
     print(f"Total claims verified: {total}")
     print()
 
-    removed_text = None  # We don't know which was removed without capturing it
-    custom_found = False
     for cv in verdicts:
         print(f"  Claim: {cv['claim_text'][:70]}")
         print(f"  Verdict: {cv.get('verdict', '?').upper()}")
         print()
-        if cv["claim_text"] == CUSTOM_CLAIM_TEXT:
-            custom_found = True
 
-    # Basic assertions
     passed = True
 
-    if total == 0:
-        print("FAIL: total_claims is 0 — pipeline may not have run correctly")
+    if CUSTOM_CLAIM_TEXT in claim_texts:
+        print(f"PASS: Custom claim '{CUSTOM_CLAIM_TEXT}' is in verdicts")
+    else:
+        print(f"FAIL: Custom claim '{CUSTOM_CLAIM_TEXT}' NOT found in verdicts")
         passed = False
 
-    if not custom_found:
-        print(f"FAIL: Custom claim '{CUSTOM_CLAIM_TEXT}' not found in verdicts")
+    if removed_claim_text and removed_claim_text in claim_texts:
+        print(f"FAIL: Removed claim '{removed_claim_text[:60]}' is still in verdicts!")
         passed = False
-    else:
-        print(f"PASS: Custom claim '{CUSTOM_CLAIM_TEXT}' is present in verdicts")
+    elif removed_claim_text:
+        print(f"PASS: Removed claim '{removed_claim_text[:60]}' is correctly excluded")
 
-    if passed:
-        print("\nOVERALL: PASS")
+    if total > 0:
+        print(f"PASS: {total} claims verified (pipeline ran to completion)")
     else:
-        print("\nOVERALL: FAIL")
+        print("FAIL: total_claims is 0")
+        passed = False
 
+    print(f"\nOVERALL: {'PASS' if passed else 'FAIL'}")
     return passed
 
 

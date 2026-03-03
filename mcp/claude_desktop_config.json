@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "validity": {
+      "command": "python",
+      "args": ["/absolute/path/to/validity/mcp/server.py"],
+      "cwd": "/absolute/path/to/validity",
+      "env": {
+        "LLM_PROVIDER": "openai",
+        "LLM_API_KEY": "your-openai-key",
+        "LLM_MODEL_COMPLEX": "gpt-4o",
+        "LLM_MODEL_STANDARD": "gpt-4o-mini",
+        "SEARCH_PROVIDER": "serper",
+        "SEARCH_API_KEY": "your-serper-key"
+      }
+    }
+  }
+}

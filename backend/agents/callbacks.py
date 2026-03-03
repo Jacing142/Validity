@@ -35,12 +35,21 @@ class StreamingCallbackHandler:
 
     The emit() method is thread-safe and can be called from sync nodes
     running in a ThreadPoolExecutor (LangGraph's default for sync node functions).
+
+    Phase 3 HITL coordination:
+        hitl_event    — asyncio.Event set by the WebSocket handler when user responds.
+                        None means HITL is disabled (sync endpoint / MCP / testing).
+        hitl_response — dict populated by WebSocket handler before setting hitl_event.
+                        The hitl node reads hitl_response["approved_claims"] after waking.
     """
 
     def __init__(self, queue: asyncio.Queue, run_id: str, loop: asyncio.AbstractEventLoop):
         self.queue = queue
         self.run_id = run_id
         self._loop = loop
+        # HITL coordination — populated by _run_pipeline for async (WebSocket) runs
+        self.hitl_event: asyncio.Event | None = None
+        self.hitl_response: dict = {}
 
     def _make_event(self, event: dict) -> dict:
         event = dict(event)

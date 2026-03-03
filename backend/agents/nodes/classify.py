@@ -3,6 +3,7 @@ import time
 from urllib.parse import urlparse
 
 from backend.agents.state import VerificationState
+from backend.agents.callbacks import get as get_callback
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +103,15 @@ def classify_node(state: VerificationState) -> dict:
     run_id = state.get("run_id", "unknown")
     logger.info(f"[{run_id}] [classify] Entering node")
     start = time.time()
+    cb = get_callback(run_id)
+
+    if cb:
+        cb.emit({
+            "type": "node_event",
+            "node": "classify",
+            "status": "running",
+            "detail": "Classifying sources by credibility tier...",
+        })
 
     try:
         results = state.get("search_results", [])
@@ -115,6 +125,23 @@ def classify_node(state: VerificationState) -> dict:
             classified.append(classified_result)
             tier_counts[tier] += 1
 
+            # Emit per-source classification event
+            if cb:
+                url = result.get("url", "")
+                try:
+                    from urllib.parse import urlparse as _up
+                    domain = _up(url).hostname or url
+                    domain = domain[4:] if domain.startswith("www.") else domain
+                except Exception:
+                    domain = url
+                cb.emit({
+                    "type": "node_event",
+                    "node": "classify",
+                    "status": "running",
+                    "detail": f"Source classified: {domain} → {tier.upper()} tier",
+                    "data": {"url": url, "domain": domain, "tier": tier},
+                })
+
         elapsed = time.time() - start
         logger.info(
             f"[{run_id}] [classify] Classified {len(classified)} sources "
@@ -122,10 +149,29 @@ def classify_node(state: VerificationState) -> dict:
             f"in {elapsed:.2f}s"
         )
 
+        if cb:
+            cb.emit({
+                "type": "node_event",
+                "node": "classify",
+                "status": "completed",
+                "detail": (
+                    f"Classified {len(classified)} sources: "
+                    f"{tier_counts['high']} high, {tier_counts['mid']} mid, {tier_counts['low']} low"
+                ),
+                "data": tier_counts,
+            })
+
         return {"classified_results": classified}
 
     except Exception as e:
         logger.exception(f"[{run_id}] [classify] Failed")
+        if cb:
+            cb.emit({
+                "type": "node_event",
+                "node": "classify",
+                "status": "error",
+                "detail": f"Classification failed: {str(e)}",
+            })
         errors = list(state.get("errors", []))
         errors.append(f"classify: {str(e)}")
         return {"classified_results": state.get("search_results", []), "errors": errors}

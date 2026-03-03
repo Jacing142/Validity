@@ -7,6 +7,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.config import get_llm
 from backend.agents.state import VerificationState
+from backend.agents.callbacks import get as get_callback
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,15 @@ def weigh_node(state: VerificationState) -> dict:
     run_id = state.get("run_id", "unknown")
     logger.info(f"[{run_id}] [weigh] Entering node")
     start = time.time()
+    cb = get_callback(run_id)
+
+    if cb:
+        cb.emit({
+            "type": "node_event",
+            "node": "weigh",
+            "status": "running",
+            "detail": "Weighing evidence for each claim...",
+        })
 
     try:
         classified_results = state.get("classified_results", [])
@@ -67,6 +77,16 @@ def weigh_node(state: VerificationState) -> dict:
         for claim_id, sources in by_claim.items():
             claim_text = claim_map.get(claim_id, "Unknown claim")
             logger.debug(f"[{run_id}] [weigh] Weighing {len(sources)} sources for claim '{claim_text[:60]}...'")
+
+            if cb:
+                claim_preview = claim_text[:80] + "..." if len(claim_text) > 80 else claim_text
+                cb.emit({
+                    "type": "node_event",
+                    "node": "weigh",
+                    "status": "running",
+                    "detail": f"Weighing evidence for: \"{claim_preview}\"",
+                    "data": {"claim_id": claim_id},
+                })
 
             sources_text = json.dumps(
                 [{"url": s["url"], "title": s["title"], "snippet": s["snippet"]} for s in sources],
@@ -128,14 +148,31 @@ def weigh_node(state: VerificationState) -> dict:
                     })
 
         elapsed = time.time() - start
+        num_claims = len(by_claim)
         logger.info(
             f"[{run_id}] [weigh] Assessed {len(all_assessments)} source-claim pairs in {elapsed:.2f}s"
         )
+
+        if cb:
+            cb.emit({
+                "type": "node_event",
+                "node": "weigh",
+                "status": "completed",
+                "detail": f"Evidence weighed for {num_claims} claim{'s' if num_claims != 1 else ''}",
+                "data": {"total_assessments": len(all_assessments)},
+            })
 
         return {"evidence_assessments": all_assessments}
 
     except Exception as e:
         logger.exception(f"[{run_id}] [weigh] Failed")
+        if cb:
+            cb.emit({
+                "type": "node_event",
+                "node": "weigh",
+                "status": "error",
+                "detail": f"Evidence weighing failed: {str(e)}",
+            })
         errors = list(state.get("errors", []))
         errors.append(f"weigh: {str(e)}")
         return {"evidence_assessments": [], "errors": errors}

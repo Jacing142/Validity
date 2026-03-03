@@ -6,6 +6,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.config import get_llm
 from backend.agents.state import VerificationState
+from backend.agents.callbacks import get as get_callback
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,15 @@ def synthesize_node(state: VerificationState) -> dict:
     run_id = state.get("run_id", "unknown")
     logger.info(f"[{run_id}] [synthesize] Entering node")
     start = time.time()
+    cb = get_callback(run_id)
+
+    if cb:
+        cb.emit({
+            "type": "node_event",
+            "node": "synthesize",
+            "status": "running",
+            "detail": "Synthesizing overall verdict...",
+        })
 
     try:
         claim_verdicts = state.get("claim_verdicts", [])
@@ -126,6 +136,15 @@ def synthesize_node(state: VerificationState) -> dict:
             f"[{run_id}] [synthesize] Overall verdict: {overall_verdict_str} in {elapsed:.2f}s"
         )
 
+        if cb:
+            cb.emit({
+                "type": "node_event",
+                "node": "synthesize",
+                "status": "completed",
+                "detail": f"Overall verdict: {overall_verdict_str.upper()}",
+                "data": {"verdict": overall_verdict_str},
+            })
+
         overall_verdict = {
             "summary": summary,
             "verdict": overall_verdict_str,
@@ -141,6 +160,13 @@ def synthesize_node(state: VerificationState) -> dict:
 
     except Exception as e:
         logger.exception(f"[{run_id}] [synthesize] Failed")
+        if cb:
+            cb.emit({
+                "type": "node_event",
+                "node": "synthesize",
+                "status": "error",
+                "detail": f"Synthesis failed: {str(e)}",
+            })
         errors = list(state.get("errors", []))
         errors.append(f"synthesize: {str(e)}")
         return {

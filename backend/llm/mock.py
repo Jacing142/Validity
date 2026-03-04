@@ -27,12 +27,20 @@ def _detect_intent(messages: list[BaseMessage]) -> str:
             elif msg.type == "human":
                 human_content = msg.content.lower()
 
-    if "atomic" in system_content and "verifiable" in system_content:
+    if "atomic" in system_content and "verifiable" in system_content and "extract" in system_content:
         return "decompose"
     if "verifiability" in system_content and "importance" in system_content:
         return "rank"
     if "adversarial" in system_content and "affirm" in system_content:
         return "query_gen"
+    # Reformulate detection: system prompt has both "subjective" and "verifiable" and "reformulation"
+    if "reformulation" in system_content or (
+        "subjective" in system_content and "verifiable" in system_content and "classifications" in system_content
+    ):
+        return "reformulate"
+    # Source credibility classifier
+    if "source credibility classifier" in system_content:
+        return "classify"
     # Verdict detection: system prompt has "validity verdict" and "confidence"
     if ("validity verdict" in system_content or "verdict assignment" in system_content) and "confidence" in system_content:
         return "verdict"
@@ -116,6 +124,52 @@ def _mock_query_gen(human_content: str) -> str:
         ])
 
     return json.dumps({"queries": queries})
+
+
+def _mock_reformulate(human_content: str) -> str:
+    """Classify claims as verifiable or subjective and suggest reformulations."""
+    claims_match = re.search(r"\[(.+)\]", human_content, re.DOTALL)
+    claims_data = []
+    if claims_match:
+        try:
+            claims_data = json.loads("[" + claims_match.group(1) + "]")
+        except Exception:
+            pass
+
+    # Keywords that indicate subjective/superlative language
+    subjective_keywords = ["best", "worst", "amazing", "beautiful", "greatest", "most popular",
+                           "leading", "top", "superior", "excellent", "perfect", "outstanding"]
+
+    classifications = []
+    for claim in claims_data:
+        cid = claim.get("id", "")
+        text = claim.get("text", "")
+        text_lower = text.lower()
+
+        is_subjective = any(kw in text_lower for kw in subjective_keywords)
+
+        if is_subjective:
+            # Generate a simple reformulation by replacing vague superlatives
+            reformulation = text
+            for kw in subjective_keywords:
+                if kw in text_lower:
+                    reformulation = f"{text} (measured by objective metrics such as sales figures, ratings, or market share)"
+                    break
+            classifications.append({
+                "id": cid,
+                "classification": "subjective",
+                "reasoning": f"Contains subjective language that cannot be directly verified.",
+                "reformulation": reformulation,
+            })
+        else:
+            classifications.append({
+                "id": cid,
+                "classification": "verifiable",
+                "reasoning": "Contains a specific, checkable factual assertion.",
+                "reformulation": None,
+            })
+
+    return json.dumps({"classifications": classifications})
 
 
 def _mock_weigh(human_content: str) -> str:
@@ -233,6 +287,26 @@ def _mock_synthesize(human_content: str) -> str:
     return json.dumps({"verdict": overall, "summary": summary})
 
 
+def _mock_classify_llm(human_content: str) -> str:
+    """LLM fallback for source credibility classification."""
+    # Check for obviously generic or known domains
+    domain_match = re.search(r"Domain:\s*(\S+)", human_content)
+    domain = domain_match.group(1).lower() if domain_match else ""
+
+    # If the domain has recognizable signals of credibility
+    known_generic = ["blogspot", "wordpress", "wix", "squarespace", "tumblr", "medium.com"]
+    if any(g in domain for g in known_generic):
+        return json.dumps({
+            "tier": "low",
+            "reasoning": "Unknown domain with no clear authority signals.",
+        })
+
+    return json.dumps({
+        "tier": "mid",
+        "reasoning": "Recognized as an established publication.",
+    })
+
+
 class MockChatModel(BaseChatModel):
     """A mock LangChain-compatible chat model for pipeline testing."""
 
@@ -258,6 +332,8 @@ class MockChatModel(BaseChatModel):
             "decompose": _mock_decompose,
             "rank": _mock_rank,
             "query_gen": _mock_query_gen,
+            "reformulate": _mock_reformulate,
+            "classify": _mock_classify_llm,
             "weigh": _mock_weigh,
             "verdict": _mock_verdict,
             "synthesize": _mock_synthesize,

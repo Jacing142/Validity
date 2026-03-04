@@ -1,13 +1,13 @@
 import json
 import logging
 import time
-import uuid
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.config import get_llm
 from backend.agents.state import VerificationState
 from backend.agents.callbacks import get as get_callback
+from backend.agents.utils import parse_llm_json
 
 logger = logging.getLogger(__name__)
 
@@ -84,14 +84,7 @@ def query_gen_node(state: VerificationState) -> dict:
         response = llm.invoke(messages)
         content = response.content.strip()
 
-        # Strip markdown code fences if present
-        if content.startswith("```"):
-            content = content.split("```")[1]
-            if content.startswith("json"):
-                content = content[4:]
-            content = content.strip()
-
-        parsed = json.loads(content)
+        parsed = parse_llm_json(content)
         queries = parsed.get("queries", [])
 
         elapsed = time.time() - start

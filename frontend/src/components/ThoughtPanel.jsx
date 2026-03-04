@@ -11,27 +11,29 @@ import { CheckCircle2, XCircle, Loader2, Terminal, Zap } from 'lucide-react'
 
 // Consistent color per node name so the eye can track which node is active
 const NODE_COLORS = {
-  pipeline:  'text-gray-400',
-  decompose: 'text-violet-400',
-  rank:      'text-blue-400',
-  query_gen: 'text-cyan-400',
-  search:    'text-emerald-400',
-  classify:  'text-amber-400',
-  weigh:     'text-orange-400',
-  verdict:   'text-rose-400',
-  synthesize:'text-purple-400',
+  pipeline:   'text-gray-400',
+  decompose:  'text-violet-400',
+  reformulate:'text-pink-400',
+  rank:       'text-blue-400',
+  query_gen:  'text-cyan-400',
+  search:     'text-emerald-400',
+  classify:   'text-amber-400',
+  weigh:      'text-orange-400',
+  verdict:    'text-rose-400',
+  synthesize: 'text-purple-400',
 }
 
 const NODE_BG = {
-  pipeline:  'bg-gray-800',
-  decompose: 'bg-violet-900/40',
-  rank:      'bg-blue-900/40',
-  query_gen: 'bg-cyan-900/40',
-  search:    'bg-emerald-900/40',
-  classify:  'bg-amber-900/40',
-  weigh:     'bg-orange-900/40',
-  verdict:   'bg-rose-900/40',
-  synthesize:'bg-purple-900/40',
+  pipeline:   'bg-gray-800',
+  decompose:  'bg-violet-900/40',
+  reformulate:'bg-pink-900/40',
+  rank:       'bg-blue-900/40',
+  query_gen:  'bg-cyan-900/40',
+  search:     'bg-emerald-900/40',
+  classify:   'bg-amber-900/40',
+  weigh:      'bg-orange-900/40',
+  verdict:    'bg-rose-900/40',
+  synthesize: 'bg-purple-900/40',
 }
 
 function EventRow({ event }) {

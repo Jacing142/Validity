@@ -1,5 +1,4 @@
 import logging
-from functools import lru_cache
 from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -32,32 +31,44 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
+# Manual LLM instance cache — keyed by "provider:model"
+_llm_cache: dict[str, object] = {}
+
 
 def get_llm(complexity: str = "standard"):
     """Return a LangChain chat model based on provider and complexity level.
+
+    Instances are cached by provider+model to avoid re-creating httpx clients.
 
     Args:
         complexity: "high" -> complex model, "standard" -> standard model
     """
     model = settings.LLM_MODEL_COMPLEX if complexity == "high" else settings.LLM_MODEL_STANDARD
+    cache_key = f"{settings.LLM_PROVIDER}:{model}"
+
+    if cache_key in _llm_cache:
+        return _llm_cache[cache_key]
 
     if settings.LLM_PROVIDER == "openai":
         from langchain_openai import ChatOpenAI
 
-        return ChatOpenAI(model=model, api_key=settings.LLM_API_KEY, temperature=0)
+        llm = ChatOpenAI(model=model, api_key=settings.LLM_API_KEY, temperature=0)
 
     elif settings.LLM_PROVIDER == "anthropic":
         from langchain_anthropic import ChatAnthropic
 
-        return ChatAnthropic(model=model, api_key=settings.LLM_API_KEY, temperature=0)
+        llm = ChatAnthropic(model=model, api_key=settings.LLM_API_KEY, temperature=0)
 
     elif settings.LLM_PROVIDER == "mock":
         from backend.llm.mock import MockChatModel
 
-        return MockChatModel()
+        llm = MockChatModel()
 
     else:
         raise ValueError(f"Unsupported LLM provider: {settings.LLM_PROVIDER}")
+
+    _llm_cache[cache_key] = llm
+    return llm
 
 
 def get_search_client():

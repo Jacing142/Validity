@@ -1,21 +1,46 @@
 import { useState } from 'react'
-import { X, Plus, CheckSquare, Square, AlertCircle } from 'lucide-react'
+import { Plus, CheckSquare, Square, AlertCircle, Edit2, Check } from 'lucide-react'
 
 /**
  * ClaimModal — Phase 3 HITL claim review modal.
  *
  * Props:
- *   claims     — array of { id, text, importance_score } objects from hitl_request
+ *   claims     — array of claim objects from hitl_request (may include classification, reformulation)
  *   onConfirm  — (approvedClaims: array) => void  — called with full claim objects
- *   onClose    — () => void — called when X or Cancel is clicked (auto-approves all)
  *   isOpen     — boolean
+ *
+ * For subjective claims (classification === "subjective" && reformulation != null), renders:
+ *   - Original text with "Subjective" badge
+ *   - Suggested reformulation with three options: Use reformulation / Keep original / Edit
  */
-export default function ClaimModal({ claims = [], onConfirm, onClose, isOpen }) {
+export default function ClaimModal({ claims = [], onConfirm, isOpen }) {
   const [checked, setChecked] = useState(() =>
     Object.fromEntries(claims.map((c) => [c.id, true]))
   )
   const [customText, setCustomText] = useState('')
   const [customClaims, setCustomClaims] = useState([])
+
+  // For subjective claims: track which text option is chosen
+  // Options: "reformulation" | "original" | "edit"
+  const [reformulationChoice, setReformulationChoice] = useState(() => {
+    const choices = {}
+    for (const c of claims) {
+      if (c.classification === 'subjective' && c.reformulation) {
+        choices[c.id] = 'reformulation'
+      }
+    }
+    return choices
+  })
+  // For "edit" option: track the edited text per claim
+  const [editedText, setEditedText] = useState(() => {
+    const edits = {}
+    for (const c of claims) {
+      if (c.classification === 'subjective' && c.reformulation) {
+        edits[c.id] = c.reformulation
+      }
+    }
+    return edits
+  })
 
   if (!isOpen) return null
 
@@ -26,8 +51,6 @@ export default function ClaimModal({ claims = [], onConfirm, onClose, isOpen }) 
   function addCustom() {
     const trimmed = customText.trim()
     if (!trimmed || trimmed.length > 500) return
-    // Use crypto.randomUUID() for a proper UUID; importance_score 1.0 because
-    // the user explicitly added this claim and wants it verified.
     const id = crypto.randomUUID()
     setCustomClaims((prev) => [...prev, { id, text: trimmed, importance_score: 1.0 }])
     setChecked((prev) => ({ ...prev, [id]: true }))
@@ -35,11 +58,29 @@ export default function ClaimModal({ claims = [], onConfirm, onClose, isOpen }) 
   }
 
   function handleConfirm() {
-    const approved = [
-      ...claims.filter((c) => checked[c.id]),
-      ...customClaims.filter((c) => checked[c.id]),
-    ]
-    onConfirm(approved)
+    const approvedOriginal = claims
+      .filter((c) => checked[c.id])
+      .map((c) => {
+        const copy = { ...c }
+        if (c.classification === 'subjective' && c.reformulation) {
+          const choice = reformulationChoice[c.id] || 'reformulation'
+          if (choice === 'reformulation') {
+            copy.text = c.reformulation
+          } else if (choice === 'original') {
+            copy.text = c.original_text || c.text
+          } else if (choice === 'edit') {
+            copy.text = editedText[c.id] || c.reformulation
+          }
+        }
+        return copy
+      })
+
+    const approvedCustom = customClaims.filter((c) => checked[c.id])
+    onConfirm([...approvedOriginal, ...approvedCustom])
+  }
+
+  function handleSkipAll() {
+    onConfirm(claims)
   }
 
   const allClaims = [...claims, ...customClaims]
@@ -47,11 +88,8 @@ export default function ClaimModal({ claims = [], onConfirm, onClose, isOpen }) 
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in">
-      {/* Backdrop */}
-      <div
-        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
-        onClick={onClose}
-      />
+      {/* Backdrop — no click handler, modal can only be dismissed via buttons */}
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
 
       {/* Modal */}
       <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col">
@@ -64,17 +102,10 @@ export default function ClaimModal({ claims = [], onConfirm, onClose, isOpen }) 
               remove noise, or add claims the AI missed.
             </p>
           </div>
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 ml-4 flex-shrink-0"
-            title="Cancel (auto-approves all claims)"
-          >
-            <X size={20} />
-          </button>
         </div>
 
         {/* Claims list */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-2">
+        <div className="flex-1 overflow-y-auto p-6 space-y-3">
           {allClaims.length === 0 && (
             <div className="flex items-center gap-2 text-sm text-gray-500">
               <AlertCircle size={16} />
@@ -85,34 +116,123 @@ export default function ClaimModal({ claims = [], onConfirm, onClose, isOpen }) 
           {allClaims.map((claim) => {
             const isChecked = !!checked[claim.id]
             const isCustom = !claims.some((c) => c.id === claim.id)
+            const isSubjective = !isCustom && claim.classification === 'subjective' && claim.reformulation
+            const choice = reformulationChoice[claim.id] || 'reformulation'
+
             return (
               <div
                 key={claim.id}
-                className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
-                  isChecked
-                    ? 'border-blue-200 bg-blue-50'
-                    : 'border-gray-200 bg-gray-50 opacity-60'
+                className={`rounded-lg border transition-colors ${
+                  isChecked ? 'border-blue-200 bg-blue-50' : 'border-gray-200 bg-gray-50 opacity-60'
                 }`}
-                onClick={() => toggleClaim(claim.id)}
               >
-                <span className="mt-0.5 flex-shrink-0">
-                  {isChecked
-                    ? <CheckSquare size={16} className="text-blue-600" />
-                    : <Square size={16} className="text-gray-400" />
-                  }
-                </span>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm text-gray-800 leading-relaxed">{claim.text}</p>
-                  {isCustom ? (
-                    <span className="inline-block text-[11px] text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded mt-1 font-medium">
-                      Custom
-                    </span>
-                  ) : (
-                    <p className="text-[11px] text-gray-400 mt-0.5">
-                      Importance: {Math.round(claim.importance_score * 100)}%
-                    </p>
-                  )}
+                {/* Main row — click to toggle */}
+                <div
+                  className="flex items-start gap-3 p-3 cursor-pointer"
+                  onClick={() => toggleClaim(claim.id)}
+                >
+                  <span className="mt-0.5 flex-shrink-0">
+                    {isChecked
+                      ? <CheckSquare size={16} className="text-blue-600" />
+                      : <Square size={16} className="text-gray-400" />
+                    }
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    {isSubjective ? (
+                      <>
+                        {/* Original text with Subjective badge */}
+                        <div className="flex items-start gap-2 flex-wrap">
+                          <p className="text-sm text-gray-600 leading-relaxed line-through decoration-amber-400">
+                            {claim.original_text || claim.text}
+                          </p>
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-200 flex-shrink-0">
+                            Subjective
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-gray-400 mt-0.5">
+                          Importance: {Math.round((claim.importance_score || 0) * 100)}%
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-sm text-gray-800 leading-relaxed">{claim.text}</p>
+                        {isCustom ? (
+                          <span className="inline-block text-[11px] text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded mt-1 font-medium">
+                            Custom
+                          </span>
+                        ) : (
+                          <p className="text-[11px] text-gray-400 mt-0.5">
+                            Importance: {Math.round((claim.importance_score || 0) * 100)}%
+                          </p>
+                        )}
+                      </>
+                    )}
+                  </div>
                 </div>
+
+                {/* Reformulation options — only shown for subjective claims */}
+                {isSubjective && isChecked && (
+                  <div className="px-3 pb-3 pt-0 ml-7 space-y-2" onClick={(e) => e.stopPropagation()}>
+                    <p className="text-[11px] text-gray-500 font-medium uppercase tracking-wide">
+                      Suggested reformulation
+                    </p>
+
+                    {/* Option: Use reformulation */}
+                    <label className={`flex items-start gap-2 cursor-pointer p-2 rounded-md border transition-colors ${choice === 'reformulation' ? 'border-blue-300 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'}`}>
+                      <input
+                        type="radio"
+                        name={`reform-${claim.id}`}
+                        checked={choice === 'reformulation'}
+                        onChange={() => setReformulationChoice((prev) => ({ ...prev, [claim.id]: 'reformulation' }))}
+                        className="mt-0.5 flex-shrink-0"
+                      />
+                      <div>
+                        <span className="text-[11px] font-semibold text-blue-700">Use reformulation</span>
+                        <p className="text-xs text-gray-700 mt-0.5">{claim.reformulation}</p>
+                      </div>
+                    </label>
+
+                    {/* Option: Keep original */}
+                    <label className={`flex items-center gap-2 cursor-pointer p-2 rounded-md border transition-colors ${choice === 'original' ? 'border-blue-300 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'}`}>
+                      <input
+                        type="radio"
+                        name={`reform-${claim.id}`}
+                        checked={choice === 'original'}
+                        onChange={() => setReformulationChoice((prev) => ({ ...prev, [claim.id]: 'original' }))}
+                        className="flex-shrink-0"
+                      />
+                      <span className="text-[11px] font-semibold text-gray-600">Keep original</span>
+                    </label>
+
+                    {/* Option: Edit */}
+                    <label className={`flex items-start gap-2 cursor-pointer p-2 rounded-md border transition-colors ${choice === 'edit' ? 'border-blue-300 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'}`}>
+                      <input
+                        type="radio"
+                        name={`reform-${claim.id}`}
+                        checked={choice === 'edit'}
+                        onChange={() => setReformulationChoice((prev) => ({ ...prev, [claim.id]: 'edit' }))}
+                        className="mt-0.5 flex-shrink-0"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <span className="text-[11px] font-semibold text-gray-600 flex items-center gap-1">
+                          <Edit2 size={10} />
+                          Edit
+                        </span>
+                        {choice === 'edit' && (
+                          <input
+                            type="text"
+                            value={editedText[claim.id] || ''}
+                            onChange={(e) => setEditedText((prev) => ({ ...prev, [claim.id]: e.target.value }))}
+                            className="mt-1 w-full text-xs px-2 py-1 rounded border border-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            placeholder="Edit the reformulation…"
+                            maxLength={500}
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        )}
+                      </div>
+                    </label>
+                  </div>
+                )}
               </div>
             )
           })}
@@ -148,10 +268,10 @@ export default function ClaimModal({ claims = [], onConfirm, onClose, isOpen }) 
           </span>
           <div className="flex gap-2">
             <button
-              onClick={onClose}
+              onClick={handleSkipAll}
               className="px-4 py-2 rounded-lg border border-gray-200 text-sm font-medium text-gray-600 hover:bg-gray-50"
             >
-              Cancel
+              Skip Review (verify all)
             </button>
             <button
               onClick={handleConfirm}

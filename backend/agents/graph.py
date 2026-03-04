@@ -4,6 +4,7 @@ from langgraph.graph import END, START, StateGraph
 
 from backend.agents.state import VerificationState
 from backend.agents.nodes.decompose import decompose_node
+from backend.agents.nodes.reformulate import reformulate_node
 from backend.agents.nodes.rank import rank_node
 from backend.agents.nodes.hitl import hitl_node
 from backend.agents.nodes.query_gen import query_gen_node
@@ -67,6 +68,7 @@ graph = StateGraph(VerificationState)
 
 # Register all nodes
 graph.add_node("decompose", decompose_node)
+graph.add_node("reformulate", reformulate_node)
 graph.add_node("rank", rank_node)
 graph.add_node("hitl", hitl_node)            # Phase 3: HITL pause/resume node
 graph.add_node("no_claims", _no_claims_node)  # Phase 3: zero-claim short-circuit
@@ -79,7 +81,8 @@ graph.add_node("synthesize", synthesize_node)
 
 # Phase 3: rank → hitl → [conditional] → query_gen  (or → no_claims → END)
 graph.add_edge(START, "decompose")
-graph.add_edge("decompose", "rank")
+graph.add_edge("decompose", "reformulate")
+graph.add_edge("reformulate", "rank")
 graph.add_edge("rank", "hitl")
 graph.add_conditional_edges(
     "hitl",

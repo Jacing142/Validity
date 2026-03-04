@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import time
@@ -8,6 +9,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from backend.config import get_llm
 from backend.agents.state import VerificationState
 from backend.agents.callbacks import get as get_callback
+from backend.agents.utils import parse_llm_json
 
 logger = logging.getLogger(__name__)
 
@@ -39,15 +41,15 @@ Return a JSON object with this exact structure:
 Return ONLY the JSON object, no other text."""
 
 
-def weigh_node(state: VerificationState) -> dict:
-    """Node 6: LLM assesses each source vs. its claim, applies tier-based weights."""
+async def weigh_node(state: VerificationState) -> dict:
+    """Node 6: LLM assesses each source vs. its claim, applies tier-based weights (parallel per claim)."""
     run_id = state.get("run_id", "unknown")
     logger.info(f"[{run_id}] [weigh] Entering node")
     start = time.time()
     cb = get_callback(run_id)
 
     if cb:
-        cb.emit({
+        await cb.aemit({
             "type": "node_event",
             "node": "weigh",
             "status": "running",
@@ -72,15 +74,13 @@ def weigh_node(state: VerificationState) -> dict:
         # Build lookup for claim text
         claim_map = {c["id"]: c["text"] for c in approved_claims}
 
-        all_assessments = []
-
-        for claim_id, sources in by_claim.items():
-            claim_text = claim_map.get(claim_id, "Unknown claim")
+        async def weigh_single_claim(claim_id: str, sources: list[dict], claim_text: str) -> list[dict]:
+            """Assess all sources for a single claim; returns list of assessment dicts."""
             logger.debug(f"[{run_id}] [weigh] Weighing {len(sources)} sources for claim '{claim_text[:60]}...'")
 
             if cb:
                 claim_preview = claim_text[:80] + "..." if len(claim_text) > 80 else claim_text
-                cb.emit({
+                await cb.aemit({
                     "type": "node_event",
                     "node": "weigh",
                     "status": "running",
@@ -104,20 +104,14 @@ def weigh_node(state: VerificationState) -> dict:
             ]
 
             try:
-                response = llm.invoke(messages)
+                response = await llm.ainvoke(messages)
                 content = response.content.strip()
-
-                if content.startswith("```"):
-                    content = content.split("```")[1]
-                    if content.startswith("json"):
-                        content = content[4:]
-                    content = content.strip()
-
-                parsed = json.loads(content)
+                parsed = parse_llm_json(content)
                 assessments_by_url = {
                     a["source_url"]: a for a in parsed.get("assessments", [])
                 }
 
+                results = []
                 for source in sources:
                     url = source["url"]
                     assessment_data = assessments_by_url.get(url, {})
@@ -125,27 +119,39 @@ def weigh_node(state: VerificationState) -> dict:
                     reasoning = assessment_data.get("reasoning", "No reasoning provided.")
                     tier = source.get("source_tier", "low")
                     weight = TIER_WEIGHTS.get(tier, 0.3)
-
-                    all_assessments.append({
+                    results.append({
                         "claim_id": claim_id,
                         "source": source,
                         "assessment": assessment,
                         "reasoning": reasoning,
                         "weight": weight,
                     })
+                return results
 
             except Exception as e:
                 logger.warning(f"[{run_id}] [weigh] Failed for claim {claim_id}: {e}")
                 # Add all sources as irrelevant if LLM fails for this claim
-                for source in sources:
-                    tier = source.get("source_tier", "low")
-                    all_assessments.append({
+                return [
+                    {
                         "claim_id": claim_id,
                         "source": source,
                         "assessment": "irrelevant",
                         "reasoning": f"Assessment failed: {str(e)}",
-                        "weight": TIER_WEIGHTS.get(tier, 0.3),
-                    })
+                        "weight": TIER_WEIGHTS.get(source.get("source_tier", "low"), 0.3),
+                    }
+                    for source in sources
+                ]
+
+        # Run all claims concurrently
+        tasks = [
+            weigh_single_claim(claim_id, sources, claim_map.get(claim_id, "Unknown claim"))
+            for claim_id, sources in by_claim.items()
+        ]
+        results_nested = await asyncio.gather(*tasks)
+
+        all_assessments = []
+        for batch in results_nested:
+            all_assessments.extend(batch)
 
         elapsed = time.time() - start
         num_claims = len(by_claim)
@@ -154,7 +160,7 @@ def weigh_node(state: VerificationState) -> dict:
         )
 
         if cb:
-            cb.emit({
+            await cb.aemit({
                 "type": "node_event",
                 "node": "weigh",
                 "status": "completed",
@@ -167,7 +173,7 @@ def weigh_node(state: VerificationState) -> dict:
     except Exception as e:
         logger.exception(f"[{run_id}] [weigh] Failed")
         if cb:
-            cb.emit({
+            await cb.aemit({
                 "type": "node_event",
                 "node": "weigh",
                 "status": "error",

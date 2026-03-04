@@ -212,6 +212,7 @@ export default function VerdictPanel({ verdict, status, error }) {
     medium_validity_count,
     low_validity_count,
     contradicted_count,
+    errors = [],
   } = verdict
 
   const styles = VERDICT_STYLES[overallVerdict] || VERDICT_STYLES.medium
@@ -258,6 +259,23 @@ export default function VerdictPanel({ verdict, status, error }) {
           )}
         </div>
       </div>
+
+      {/* Pipeline warnings — surfaced errors from backend */}
+      {errors.length > 0 && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 flex items-start gap-3">
+          <AlertTriangle size={16} className="text-amber-500 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-xs font-semibold text-amber-800 mb-1">
+              {errors.length} pipeline warning{errors.length !== 1 ? 's' : ''} — results may be incomplete
+            </p>
+            <ul className="space-y-0.5">
+              {errors.map((e, i) => (
+                <li key={i} className="text-xs text-amber-700">{e}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
 
       {/* Per-claim cards */}
       {claim_verdicts.length > 0 && (

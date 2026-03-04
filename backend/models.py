@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 
 class Claim(BaseModel):
@@ -48,10 +48,21 @@ class OverallVerdict(BaseModel):
     medium_validity_count: int
     low_validity_count: int
     contradicted_count: int
+    errors: list[str] = []
 
 
 class VerifyRequest(BaseModel):
     text: str
+
+    @field_validator('text')
+    @classmethod
+    def validate_text_length(cls, v):
+        v = v.strip()
+        if len(v) < 50:
+            raise ValueError('Text must be at least 50 characters. Provide a paragraph with factual claims to verify.')
+        if len(v) > 5000:
+            raise ValueError('Text must be 5000 characters or fewer. Submit a shorter passage.')
+        return v
 
 
 class VerifyResponse(BaseModel):

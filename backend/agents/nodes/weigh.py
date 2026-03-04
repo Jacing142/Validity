@@ -15,16 +15,27 @@ logger = logging.getLogger(__name__)
 
 TIER_WEIGHTS = {"high": 1.0, "mid": 0.6, "low": 0.3}
 
-SYSTEM_PROMPT = """You are an evidence analysis assistant. Given a claim and a list of sources with their snippets, assess each source.
+SYSTEM_PROMPT = """You are an evidence analysis assistant. Given a claim and a list of sources with their snippets, assess each source carefully.
 
 For each source, determine:
 1. **Assessment**: Does the source SUPPORT, CONTRADICT, or is it IRRELEVANT to the specific claim?
 2. **Reasoning**: One-sentence explanation of why.
 
-Be precise:
-- SUPPORTS: the source provides evidence that the claim is true
-- CONTRADICTS: the source provides evidence that the claim is false or challenges it
-- IRRELEVANT: the source is about a related topic but doesn't address the specific claim
+Definitions:
+- SUPPORTS: the source provides evidence that the claim is true or substantially correct
+- CONTRADICTS: the source provides clear evidence that the claim is false or factually wrong
+- IRRELEVANT: the source does not directly address the specific claim
+
+Critical rules for accurate assessment:
+- **Rounding and approximations are NOT contradictions.** If a claim says "365.25 days" and a source says "approximately 365 days" or "about 365 days", that source SUPPORTS the claim — it is using a rounded figure, not disputing the precise value.
+- **Partial information is NOT a contradiction.** A source that confirms part of a claim without mentioning the rest is SUPPORTS or IRRELEVANT, not CONTRADICTS.
+- **CONTRADICTS requires clear, direct disagreement.** Only use CONTRADICTS when a source explicitly states the claim is wrong, provides a meaningfully different figure, or directly disputes the claim's core assertion.
+- **Be conservative with CONTRADICTS.** When in doubt between SUPPORTS and CONTRADICTS, choose SUPPORTS if the source is broadly consistent with the claim.
+
+Examples of what is NOT a contradiction:
+- Claim: "Water boils at 100°C" — Source: "Water boils at around 100 degrees" → SUPPORTS
+- Claim: "Earth orbits Sun in 365.25 days" — Source: "Earth takes 365 days to orbit the Sun" → SUPPORTS (rounded figure)
+- Claim: "NASA was founded in 1958" — Source: "NASA has existed since the late 1950s" → SUPPORTS
 
 Return a JSON object with this exact structure:
 {
@@ -39,7 +50,6 @@ Return a JSON object with this exact structure:
 }
 
 Return ONLY the JSON object, no other text."""
-
 
 async def weigh_node(state: VerificationState) -> dict:
     """Node 6: LLM assesses each source vs. its claim, applies tier-based weights (parallel per claim)."""

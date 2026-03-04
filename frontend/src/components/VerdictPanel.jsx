@@ -106,14 +106,21 @@ function ClaimCard({ claimVerdict }) {
   const [showSources, setShowSources] = useState(false)
   const [showEvidence, setShowEvidence] = useState(false)
 
-  const { claim_text, verdict, confidence, sources = [], supporting_evidence = [], contradicting_evidence = [] } = claimVerdict
+  const { claim_text, verdict, confidence, sources = [], supporting_evidence = [], contradicting_evidence = [], kept_original_subjective } = claimVerdict
   const styles = VERDICT_STYLES[verdict] || VERDICT_STYLES.medium
 
   return (
     <div className={`rounded-lg border bg-gradient-to-b ${styles.banner} p-4 flex flex-col gap-3`}>
       {/* Claim header */}
       <div className="flex items-start justify-between gap-3">
-        <p className="text-sm font-medium text-gray-800 leading-relaxed">{claim_text}</p>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium text-gray-800 leading-relaxed">{claim_text}</p>
+          {kept_original_subjective && (
+            <span className="inline-flex items-center mt-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-100 text-amber-800 border border-amber-200">
+              Subjective — original wording
+            </span>
+          )}
+        </div>
         <div className="flex flex-col items-end gap-1 flex-shrink-0">
           <VerdictBadge verdict={verdict} />
           <span className="text-xs text-gray-500">{Math.round(confidence * 100)}% confidence</span>

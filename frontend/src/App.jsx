@@ -49,7 +49,6 @@ export default function App() {
           isOpen={!!hitlClaims}
           claims={hitlClaims}
           onConfirm={submitHitl}
-          onClose={() => submitHitl(hitlClaims)}
         />
       )}
     </div>

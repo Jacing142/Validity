@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { X, Plus, CheckSquare, Square, AlertCircle } from 'lucide-react'
+import { Plus, CheckSquare, Square, AlertCircle } from 'lucide-react'
 
 /**
  * ClaimModal — Phase 3 HITL claim review modal.
@@ -7,10 +7,9 @@ import { X, Plus, CheckSquare, Square, AlertCircle } from 'lucide-react'
  * Props:
  *   claims     — array of { id, text, importance_score } objects from hitl_request
  *   onConfirm  — (approvedClaims: array) => void  — called with full claim objects
- *   onClose    — () => void — called when X or Cancel is clicked (auto-approves all)
  *   isOpen     — boolean
  */
-export default function ClaimModal({ claims = [], onConfirm, onClose, isOpen }) {
+export default function ClaimModal({ claims = [], onConfirm, isOpen }) {
   const [checked, setChecked] = useState(() =>
     Object.fromEntries(claims.map((c) => [c.id, true]))
   )
@@ -42,16 +41,18 @@ export default function ClaimModal({ claims = [], onConfirm, onClose, isOpen }) 
     onConfirm(approved)
   }
 
+  function handleSkipAll() {
+    // Skip review — verify all original claims
+    onConfirm(claims)
+  }
+
   const allClaims = [...claims, ...customClaims]
   const approvedCount = allClaims.filter((c) => checked[c.id]).length
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in">
-      {/* Backdrop */}
-      <div
-        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
-        onClick={onClose}
-      />
+      {/* Backdrop — no click handler, modal can only be dismissed via buttons */}
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
 
       {/* Modal */}
       <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col">
@@ -64,13 +65,6 @@ export default function ClaimModal({ claims = [], onConfirm, onClose, isOpen }) 
               remove noise, or add claims the AI missed.
             </p>
           </div>
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 ml-4 flex-shrink-0"
-            title="Cancel (auto-approves all claims)"
-          >
-            <X size={20} />
-          </button>
         </div>
 
         {/* Claims list */}
@@ -148,10 +142,10 @@ export default function ClaimModal({ claims = [], onConfirm, onClose, isOpen }) 
           </span>
           <div className="flex gap-2">
             <button
-              onClick={onClose}
+              onClick={handleSkipAll}
               className="px-4 py-2 rounded-lg border border-gray-200 text-sm font-medium text-gray-600 hover:bg-gray-50"
             >
-              Cancel
+              Skip Review (verify all)
             </button>
             <button
               onClick={handleConfirm}

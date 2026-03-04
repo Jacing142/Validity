@@ -1,4 +1,3 @@
-import json
 import logging
 import time
 import uuid
@@ -8,6 +7,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from backend.config import get_llm
 from backend.agents.state import VerificationState
 from backend.agents.callbacks import get as get_callback
+from backend.agents.utils import parse_llm_json
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +19,35 @@ Rules:
 - Include only claims that are objectively true or false — claims that could, in principle, be checked against evidence.
 - Do NOT rephrase or interpret — extract the claim as close to the original wording as possible.
 - Each claim should be understandable without reading the original text (i.e., self-contained).
+
+Examples:
+
+Input: "The Eiffel Tower is 330 metres tall and was completed in 1889. It is one of the most beautiful structures ever built. Over 7 million people visit it annually, making it the most-visited paid monument in the world."
+
+Output:
+{
+  "claims": [
+    {"text": "The Eiffel Tower is 330 metres tall"},
+    {"text": "The Eiffel Tower was completed in 1889"},
+    {"text": "Over 7 million people visit the Eiffel Tower annually"},
+    {"text": "The Eiffel Tower is the most-visited paid monument in the world"}
+  ]
+}
+
+Note: "It is one of the most beautiful structures ever built" is excluded — it is a subjective opinion, not a verifiable fact.
+
+Input: "Tesla reported $96.8 billion in revenue for 2023. The company makes the best electric vehicles on the market. Their Model Y was the world's best-selling car in 2023, with 1.2 million units sold."
+
+Output:
+{
+  "claims": [
+    {"text": "Tesla reported $96.8 billion in revenue for 2023"},
+    {"text": "The Tesla Model Y was the world's best-selling car in 2023"},
+    {"text": "The Tesla Model Y sold 1.2 million units in 2023"}
+  ]
+}
+
+Note: "The company makes the best electric vehicles on the market" is excluded — it is a subjective assertion, not a verifiable fact.
 
 Return a JSON object with this exact structure:
 {
@@ -58,14 +87,7 @@ def decompose_node(state: VerificationState) -> dict:
         response = llm.invoke(messages)
         content = response.content.strip()
 
-        # Strip markdown code fences if present
-        if content.startswith("```"):
-            content = content.split("```")[1]
-            if content.startswith("json"):
-                content = content[4:]
-            content = content.strip()
-
-        parsed = json.loads(content)
+        parsed = parse_llm_json(content)
         raw_claims = parsed.get("claims", [])
 
         claims = []

@@ -7,6 +7,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from backend.config import get_llm
 from backend.agents.state import VerificationState
 from backend.agents.callbacks import get as get_callback
+from backend.agents.utils import parse_llm_json
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,7 @@ def synthesize_node(state: VerificationState) -> dict:
                     "medium_validity_count": 0,
                     "low_validity_count": 0,
                     "contradicted_count": 0,
+                    "errors": list(state.get("errors", [])),
                 }
             }
 
@@ -103,14 +105,7 @@ def synthesize_node(state: VerificationState) -> dict:
         try:
             response = llm.invoke(messages)
             content = response.content.strip()
-
-            if content.startswith("```"):
-                content = content.split("```")[1]
-                if content.startswith("json"):
-                    content = content[4:]
-                content = content.strip()
-
-            parsed = json.loads(content)
+            parsed = parse_llm_json(content)
             overall_verdict_str = parsed.get("verdict", "mixed")
             summary = parsed.get("summary", "Verification complete.")
 
@@ -154,6 +149,7 @@ def synthesize_node(state: VerificationState) -> dict:
             "medium_validity_count": medium_count,
             "low_validity_count": low_count,
             "contradicted_count": contradicted_count,
+            "errors": list(state.get("errors", [])),
         }
 
         return {"overall_verdict": overall_verdict}

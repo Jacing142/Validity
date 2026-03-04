@@ -16,12 +16,18 @@ logger = logging.getLogger(__name__)
 SYSTEM_PROMPT = """You are a verdict assignment assistant. Given a claim and its weighted evidence, assign a validity verdict.
 
 Verdict definitions:
-- "high": Strong weighted support from credible sources (high/mid tier), with no significant contradictions.
-- "medium": Mixed evidence, or support only from low-tier sources, or insufficient evidence to reach a confident conclusion.
-- "low": Weak or no support, or contradicted by credible sources.
-- "contradicted": High-tier or mid-tier sources directly contradict the claim.
+- "high": Strong support from multiple sources with no contradictions. Can be high if ALL available sources support the claim consistently, even if they are low-tier, provided there are no contradictions and the claim is a well-established fact.
+- "medium": Mixed evidence, insufficient sources, or only 1-2 sources supporting with no contradictions.
+- "low": Weak or no support, or contradicted by low-tier sources, or fewer than 2 supporting sources.
+- "contradicted": Any high-tier or mid-tier sources directly contradict the claim, OR multiple low-tier sources contradict it.
 
-Also assign a confidence score (0.0–1.0) reflecting your certainty in the verdict.
+Confidence score (0.0–1.0): reflects your certainty in the verdict.
+
+Critical rules:
+- If ALL sources support a claim and NONE contradict it, the verdict should be "high" or "medium" — never "low".
+- "low" requires either active contradiction OR very few supporting sources (1 or fewer).
+- Consistent agreement across multiple sources — even low-tier ones — is meaningful signal. 5+ sources all supporting with 0 contradictions = "high".
+- Reserve "low" for genuine lack of support or active contradiction, not for cases where sources happen to be low-tier but all agree.
 
 Return a JSON object with this exact structure:
 {
@@ -31,7 +37,6 @@ Return a JSON object with this exact structure:
 }
 
 Return ONLY the JSON object, no other text."""
-
 
 async def verdict_node(state: VerificationState) -> dict:
     """Node 7: Assign a validity verdict per claim based on weighted evidence (parallel per claim)."""

@@ -279,10 +279,10 @@ async def _run_from_approved_claims(text: str, approved_claims: list[dict]) -> s
 
     # Run pipeline from query_gen (skip decompose/reformulate/rank/hitl)
     state.update(query_gen_node(state))
-    state.update(await search_node(state))     # async
-    state.update(classify_node(state))
-    state.update(await weigh_node(state))      # async
-    state.update(await verdict_node(state))    # async
+    state.update(await search_node(state))      # async
+    state.update(await classify_node(state))    # async (LLM fallback for unknown domains)
+    state.update(await weigh_node(state))       # async
+    state.update(await verdict_node(state))     # async
     state.update(synthesize_node(state))
 
     overall = state.get("overall_verdict")

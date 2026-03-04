@@ -37,6 +37,7 @@ class ClaimVerdict(BaseModel):
     supporting_evidence: list[EvidenceAssessment]
     contradicting_evidence: list[EvidenceAssessment]
     sources: list[SearchResult]
+    kept_original_subjective: bool = False
 
 
 class OverallVerdict(BaseModel):

@@ -33,10 +33,8 @@ def _detect_intent(messages: list[BaseMessage]) -> str:
         return "rank"
     if "adversarial" in system_content and "affirm" in system_content:
         return "query_gen"
-    # Reformulate detection: system prompt has both "subjective" and "verifiable" and "reformulation"
-    if "reformulation" in system_content or (
-        "subjective" in system_content and "verifiable" in system_content and "classifications" in system_content
-    ):
+    # Reformulate detection: system prompt explicitly mentions cleaner and quantifiable alternatives
+    if "reformulation" in system_content and "cleaner" in system_content and "quantifiable" in system_content:
         return "reformulate"
     # Source credibility classifier
     if "source credibility classifier" in system_content:
@@ -66,7 +64,15 @@ def _mock_decompose(human_content: str) -> str:
     for s in sentences:
         s = s.strip()
         if len(s) > 10 and not s.startswith("Note") and not s.startswith("According to my"):
-            claims.append({"text": s})
+            lower = s.lower()
+            is_subjective = any(word in lower for word in [
+                "best", "worst", "beautiful", "amazing", "terrible",
+                "great", "incredible", "fantastic",
+            ])
+            claims.append({
+                "text": s,
+                "claim_type": "subjective" if is_subjective else "verifiable",
+            })
 
     return json.dumps({"claims": claims})
 
@@ -127,7 +133,7 @@ def _mock_query_gen(human_content: str) -> str:
 
 
 def _mock_reformulate(human_content: str) -> str:
-    """Classify claims as verifiable or subjective and suggest reformulations."""
+    """Generate mock reformulations (cleaner + quantifiable) for subjective claims."""
     claims_match = re.search(r"\[(.+)\]", human_content, re.DOTALL)
     claims_data = []
     if claims_match:
@@ -136,40 +142,18 @@ def _mock_reformulate(human_content: str) -> str:
         except Exception:
             pass
 
-    # Keywords that indicate subjective/superlative language
-    subjective_keywords = ["best", "worst", "amazing", "beautiful", "greatest", "most popular",
-                           "leading", "top", "superior", "excellent", "perfect", "outstanding"]
-
-    classifications = []
+    reformulations = []
     for claim in claims_data:
         cid = claim.get("id", "")
         text = claim.get("text", "")
-        text_lower = text.lower()
+        text_lower = text.lower().rstrip(".")
+        reformulations.append({
+            "id": cid,
+            "cleaner": f"It is widely acknowledged that {text_lower}",
+            "quantifiable": f"According to available data, {text_lower} based on measurable metrics",
+        })
 
-        is_subjective = any(kw in text_lower for kw in subjective_keywords)
-
-        if is_subjective:
-            # Generate a simple reformulation by replacing vague superlatives
-            reformulation = text
-            for kw in subjective_keywords:
-                if kw in text_lower:
-                    reformulation = f"{text} (measured by objective metrics such as sales figures, ratings, or market share)"
-                    break
-            classifications.append({
-                "id": cid,
-                "classification": "subjective",
-                "reasoning": f"Contains subjective language that cannot be directly verified.",
-                "reformulation": reformulation,
-            })
-        else:
-            classifications.append({
-                "id": cid,
-                "classification": "verifiable",
-                "reasoning": "Contains a specific, checkable factual assertion.",
-                "reformulation": None,
-            })
-
-    return json.dumps({"classifications": classifications})
+    return json.dumps({"reformulations": reformulations})
 
 
 def _mock_weigh(human_content: str) -> str:

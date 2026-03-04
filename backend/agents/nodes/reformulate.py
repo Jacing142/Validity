@@ -1,7 +1,14 @@
 """
-Reformulate node — classifies claims and suggests quantifiable alternatives for subjective ones.
+Reformulate node — generates alternative wordings for subjective claims.
 Sits between decompose and rank in the graph.
+
+For verifiable claims: passes through unchanged.
+For subjective claims: generates 2 alternatives:
+  1. A cleaner/clearer version of the original statement
+  2. A more specific/quantifiable version that could be web-searched
 """
+
+import asyncio
 import json
 import logging
 import time
@@ -15,28 +22,33 @@ from backend.agents.utils import parse_llm_json
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You are a claim classification and reformulation assistant. For each claim, determine if it is directly verifiable or if it is subjective/abstract.
+SYSTEM_PROMPT = """You are a claim reformulation assistant. You receive subjective or opinion-based claims and generate two alternative wordings that are more verifiable.
 
-Definitions:
-- **verifiable**: The claim contains a specific, checkable factual assertion. It could be confirmed or denied using evidence from public sources. Examples: statistics, dates, measurements, named events, rankings from official sources.
-- **subjective**: The claim contains opinion, superlative language ("best", "worst", "amazing"), vague assertions ("many people think"), or abstract statements that cannot be directly checked against a source.
+For each claim, generate exactly two alternatives:
+1. **cleaner**: A clearer, less ambiguous version of the same statement. Keep the intent but remove vague language.
+2. **quantifiable**: A specific, measurable version that could be verified with a web search. Replace superlatives with rankings, replace "best" with a measurable metric, replace vague quantities with searchable assertions.
 
-For subjective claims, suggest a quantifiable reformulation — a closely related claim that IS verifiable and captures the likely intent of the original statement.
+Examples:
 
-Reformulation guidelines:
-- Preserve the original meaning as closely as possible
-- Replace superlatives with measurable metrics (e.g., "best" → "highest-rated", "most popular" → "highest sales figures")
-- Replace vague quantities with specific, searchable assertions
-- The reformulation should be something a web search could actually verify
+Claim: "Pizza is the best food in America"
+→ cleaner: "Pizza is the most popular food in America"
+→ quantifiable: "Pizza is the most consumed food in America by sales revenue"
+
+Claim: "This company has amazing customer service"
+→ cleaner: "This company is known for strong customer service"
+→ quantifiable: "This company has a customer satisfaction score above the industry average"
+
+Claim: "The Eiffel Tower is one of the most beautiful structures ever built"
+→ cleaner: "The Eiffel Tower is widely considered an iconic structure"
+→ quantifiable: "The Eiffel Tower is among the most-photographed landmarks in the world"
 
 Return a JSON object with this exact structure:
 {
-  "classifications": [
+  "reformulations": [
     {
       "id": "<claim id>",
-      "classification": "verifiable" | "subjective",
-      "reasoning": "One-sentence explanation of classification",
-      "reformulation": "Suggested quantifiable reformulation (only if subjective, null if verifiable)"
+      "cleaner": "Cleaner version of the claim",
+      "quantifiable": "Specific, measurable version of the claim"
     },
     ...
   ]
@@ -46,7 +58,7 @@ Return ONLY the JSON object, no other text."""
 
 
 async def reformulate_node(state: VerificationState) -> dict:
-    """Classify claims as verifiable or subjective and suggest reformulations."""
+    """Generate alternative wordings for subjective claims. Verifiable claims pass through unchanged."""
     run_id = state.get("run_id", "unknown")
     logger.info(f"[{run_id}] [reformulate] Entering node")
     start = time.time()
@@ -57,80 +69,105 @@ async def reformulate_node(state: VerificationState) -> dict:
             "type": "node_event",
             "node": "reformulate",
             "status": "running",
-            "detail": "Classifying claims and suggesting reformulations for subjective statements...",
+            "detail": "Analyzing claims and generating alternatives for subjective statements...",
         })
 
     try:
         claims = state.get("claims", [])
         if not claims:
-            logger.warning(f"[{run_id}] [reformulate] No claims to classify")
+            logger.warning(f"[{run_id}] [reformulate] No claims to process")
             return {"claims": []}
 
-        llm = get_llm(complexity="standard")
+        # Separate subjective claims that need reformulation
+        subjective_claims = [c for c in claims if c.get("claim_type") == "subjective"]
+        verifiable_claims = [c for c in claims if c.get("claim_type") != "subjective"]
 
-        claims_text = json.dumps(
-            [{"id": c["id"], "text": c["text"]} for c in claims],
-            indent=2,
-        )
+        # Emit events for verifiable claims passing through
+        if cb:
+            for claim in verifiable_claims:
+                await cb.aemit({
+                    "type": "node_event",
+                    "node": "reformulate",
+                    "status": "running",
+                    "detail": f"Verifiable — passing through: \"{claim['text'][:70]}\"",
+                    "data": {"claim_id": claim["id"], "claim_type": "verifiable"},
+                })
 
-        messages = [
-            SystemMessage(content=SYSTEM_PROMPT),
-            HumanMessage(content=f"Classify each claim and suggest reformulations where needed:\n\n{claims_text}"),
-        ]
+        reformulations_map = {}
 
-        response = await llm.ainvoke(messages)
-        content = response.content.strip()
-        parsed = parse_llm_json(content)
+        if subjective_claims:
+            if cb:
+                await cb.aemit({
+                    "type": "node_event",
+                    "node": "reformulate",
+                    "status": "running",
+                    "detail": f"Generating alternatives for {len(subjective_claims)} subjective claim{'s' if len(subjective_claims) != 1 else ''}...",
+                })
 
-        classifications = {
-            item["id"]: item for item in parsed.get("classifications", [])
-        }
+            llm = get_llm(complexity="standard")
 
-        # Annotate claims with classification and reformulation
+            claims_text = json.dumps(
+                [{"id": c["id"], "text": c["text"]} for c in subjective_claims],
+                indent=2,
+            )
+
+            messages = [
+                SystemMessage(content=SYSTEM_PROMPT),
+                HumanMessage(
+                    content=f"Generate two alternative wordings for each of these subjective claims:\n\n{claims_text}"
+                ),
+            ]
+
+            response = await llm.ainvoke(messages)
+            parsed = parse_llm_json(response.content)
+
+            for item in parsed.get("reformulations", []):
+                reformulations_map[item["id"]] = {
+                    "cleaner": item.get("cleaner", ""),
+                    "quantifiable": item.get("quantifiable", ""),
+                }
+
+        # Build updated claims list, preserving original order
         updated_claims = []
         for claim in claims:
             claim_copy = dict(claim)
-            classification = classifications.get(claim["id"], {})
-            claim_copy["classification"] = classification.get("classification", "verifiable")
-            claim_copy["reformulation"] = classification.get("reformulation", None)
-            claim_copy["reformulation_reasoning"] = classification.get("reasoning", "")
-            # Keep original text in a separate field for the HITL modal
-            claim_copy["original_text"] = claim["text"]
-            updated_claims.append(claim_copy)
+            if claim_copy.get("claim_type") == "subjective" and claim_copy["id"] in reformulations_map:
+                ref = reformulations_map[claim_copy["id"]]
+                claim_copy["reformulation_options"] = [
+                    ref["cleaner"],
+                    ref["quantifiable"],
+                ]
 
-            if cb:
-                if claim_copy["classification"] == "subjective" and claim_copy["reformulation"]:
+                if cb:
+                    cleaner_preview = ref["cleaner"][:50]
+                    quant_preview = ref["quantifiable"][:50]
                     await cb.aemit({
                         "type": "node_event",
                         "node": "reformulate",
                         "status": "running",
-                        "detail": f"Subjective: \"{claim['text'][:60]}...\" → suggested: \"{claim_copy['reformulation'][:60]}...\"",
+                        "detail": (
+                            f"Subjective: \"{claim['text'][:50]}...\"\n"
+                            f"  → Option 1: \"{cleaner_preview}...\"\n"
+                            f"  → Option 2: \"{quant_preview}...\""
+                        ),
                         "data": {
                             "claim_id": claim["id"],
-                            "classification": "subjective",
+                            "claim_type": "subjective",
                             "original": claim["text"],
-                            "reformulation": claim_copy["reformulation"],
+                            "options": claim_copy["reformulation_options"],
                         },
                     })
-                else:
-                    await cb.aemit({
-                        "type": "node_event",
-                        "node": "reformulate",
-                        "status": "running",
-                        "detail": f"Verifiable: \"{claim['text'][:80]}\"",
-                        "data": {
-                            "claim_id": claim["id"],
-                            "classification": "verifiable",
-                        },
-                    })
+            else:
+                # Verifiable or failed reformulation — ensure field exists
+                claim_copy.setdefault("reformulation_options", [])
 
-        subjective_count = sum(1 for c in updated_claims if c["classification"] == "subjective")
-        verifiable_count = len(updated_claims) - subjective_count
+            updated_claims.append(claim_copy)
 
         elapsed = time.time() - start
         logger.info(
-            f"[{run_id}] [reformulate] Classified {len(updated_claims)} claims "
-            f"({verifiable_count} verifiable, {subjective_count} subjective) in {elapsed:.2f}s"
+            f"[{run_id}] [reformulate] Processed {len(updated_claims)} claims "
+            f"({len(verifiable_claims)} verifiable, {len(subjective_claims)} subjective) "
+            f"in {elapsed:.2f}s"
         )
 
         if cb:
@@ -138,8 +175,15 @@ async def reformulate_node(state: VerificationState) -> dict:
                 "type": "node_event",
                 "node": "reformulate",
                 "status": "completed",
-                "detail": f"Classified {len(updated_claims)} claims: {verifiable_count} verifiable, {subjective_count} need reformulation",
-                "data": {"verifiable": verifiable_count, "subjective": subjective_count},
+                "detail": (
+                    f"Processed {len(updated_claims)} claims: "
+                    f"{len(verifiable_claims)} verifiable (unchanged), "
+                    f"{len(subjective_claims)} subjective (alternatives generated)"
+                ),
+                "data": {
+                    "verifiable": len(verifiable_claims),
+                    "subjective": len(subjective_claims),
+                },
             })
 
         return {"claims": updated_claims}
@@ -155,5 +199,5 @@ async def reformulate_node(state: VerificationState) -> dict:
             })
         errors = list(state.get("errors", []))
         errors.append(f"reformulate: {str(e)}")
-        # On failure, pass claims through unchanged (all treated as verifiable)
+        # On failure, pass claims through unchanged — ensures pipeline continues
         return {"claims": state.get("claims", []), "errors": errors}

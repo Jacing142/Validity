@@ -87,6 +87,8 @@ export default function ClaimModal({ claims = [], onConfirm, isOpen }) {
               claim={claims[currentStep]}
               decision={decisions[currentStep]}
               onChange={(update) => setDecision(currentStep, update)}
+              onNext={() => setCurrentStep((s) => s + 1)}
+              isLastClaim={currentStep === claims.length - 1}
             />
           )}
         </div>
@@ -114,7 +116,8 @@ export default function ClaimModal({ claims = [], onConfirm, isOpen }) {
             )}
           </div>
 
-          {/* Next / Submit */}
+          {/* Next / Submit — only shown for subjective claims and summary; verifiable claims
+              use the combined Confirm & Next button inside ClaimStep */}
           {isSummary ? (
             <button
               onClick={handleSubmit}
@@ -123,7 +126,7 @@ export default function ClaimModal({ claims = [], onConfirm, isOpen }) {
               <CheckCircle2 size={15} />
               Continue Verification
             </button>
-          ) : (
+          ) : claims[currentStep]?.claim_type !== 'verifiable' ? (
             <button
               onClick={() => setCurrentStep((s) => s + 1)}
               className="flex items-center gap-1 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold transition-colors"
@@ -131,14 +134,14 @@ export default function ClaimModal({ claims = [], onConfirm, isOpen }) {
               {currentStep === claims.length - 1 ? 'Review Summary' : 'Next'}
               <ChevronRight size={15} />
             </button>
-          )}
+          ) : null}
         </div>
       </div>
     </div>
   )
 }
 
-function ClaimStep({ claim, decision, onChange }) {
+function ClaimStep({ claim, decision, onChange, onNext, isLastClaim }) {
   const isSubjective = claim.claim_type === 'subjective'
   const options = claim.reformulation_options || []
 
@@ -221,31 +224,29 @@ function ClaimStep({ claim, decision, onChange }) {
       {/* Claim text */}
       <p className="text-base font-medium text-gray-800 leading-relaxed">"{claim.text}"</p>
 
-      {/* Confirm / Remove */}
-      <div className="flex gap-3">
-        <button
-          onClick={() => onChange({ action: 'confirm', selectedOption: null, selectedText: claim.text })}
-          className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold border transition-colors ${
-            decision.action === 'confirm'
-              ? 'bg-emerald-500 border-emerald-500 text-white'
-              : 'border-gray-200 text-gray-600 hover:border-emerald-300 hover:bg-emerald-50'
-          }`}
-        >
-          <CheckCircle2 size={14} />
-          Confirm
-        </button>
-        <button
-          onClick={() => onChange({ action: 'remove', selectedOption: null, selectedText: '' })}
-          className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold border transition-colors ${
-            decision.action === 'remove'
-              ? 'bg-red-50 border-red-300 text-red-700'
-              : 'border-gray-200 text-gray-500 hover:border-red-200 hover:text-red-600 hover:bg-red-50'
-          }`}
-        >
-          <XCircle size={14} />
-          Remove
-        </button>
-      </div>
+      {/* Confirm & Next — single primary action */}
+      <button
+        onClick={() => {
+          onChange({ action: 'confirm', selectedOption: null, selectedText: claim.text })
+          onNext()
+        }}
+        className="flex items-center gap-1.5 self-start px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold border border-emerald-500 transition-colors"
+      >
+        <CheckCircle2 size={14} />
+        {isLastClaim ? 'Confirm & Review' : 'Confirm & Next'}
+      </button>
+
+      {/* Remove — secondary action, also advances wizard */}
+      <button
+        onClick={() => {
+          onChange({ action: 'remove', selectedOption: null, selectedText: '' })
+          onNext()
+        }}
+        className="flex items-center gap-1.5 self-start px-3 py-1.5 rounded-lg text-xs font-semibold border border-gray-200 text-gray-500 hover:border-red-200 hover:text-red-600 hover:bg-red-50 transition-colors"
+      >
+        <XCircle size={13} />
+        Remove
+      </button>
     </div>
   )
 }

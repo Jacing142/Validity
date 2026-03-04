@@ -27,7 +27,9 @@ def _detect_intent(messages: list[BaseMessage]) -> str:
             elif msg.type == "human":
                 human_content = msg.content.lower()
 
-    if "atomic" in system_content and "verifiable" in system_content and "extract" in system_content:
+    if "statement extraction" in system_content or (
+        "atomic" in system_content and "verifiable" in system_content and "extract" in system_content
+    ):
         return "decompose"
     if "verifiability" in system_content and "importance" in system_content:
         return "rank"

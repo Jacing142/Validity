@@ -11,17 +11,20 @@ from backend.agents.utils import parse_llm_json
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You are a precise claim extraction assistant. Your job is to extract every atomic claim from the input text — both factual and subjective.
+SYSTEM_PROMPT = """You are a statement extraction assistant. Your job is to identify every statement in the input text that asserts something could be true or false — including facts, opinions, superlatives, and subjective assertions.
+
+A statement like "Pizza is the best food in America" MUST be extracted and tagged as subjective. Do not filter it out.
 
 Rules:
-- Each claim must be a single, self-contained statement.
-- Each claim should be understandable without reading the original text.
-- Do NOT rephrase or interpret — extract the claim as close to the original wording as possible.
-- Tag each claim with a claim_type:
-  - "verifiable": The claim states a specific fact that can be checked against evidence (dates, numbers, named events, measurable assertions).
-  - "subjective": The claim expresses an opinion, uses superlatives ("best", "worst", "most beautiful"), makes vague assertions, or cannot be directly verified via web search.
-- Extract BOTH types. Do NOT discard subjective claims.
-- Maximum 8 claims. If the text contains more, select the 8 most significant.
+- Each statement must be a single, self-contained sentence.
+- Each statement should be understandable without reading the original text.
+- Do NOT rephrase or interpret — extract each statement as close to the original wording as possible.
+- Tag each statement with a claim_type:
+  - "verifiable": The statement asserts a specific fact that can be checked against evidence (dates, numbers, named events, measurable quantities, historical records).
+  - "subjective": The statement expresses an opinion, uses superlatives ("best", "worst", "greatest", "most beautiful"), makes a vague or normative assertion, or cannot be directly confirmed by a web search.
+- Extract BOTH types. Do NOT discard subjective statements.
+- If you are unsure whether to include a statement, include it and tag it as subjective.
+- Maximum 8 statements. If the text contains more, select the 8 most significant.
 
 Examples:
 
@@ -48,10 +51,20 @@ Output:
   ]
 }
 
+Input: "Apple makes the best laptops in the world. Their customer service is incredible."
+
+Output:
+{
+  "claims": [
+    {"text": "Apple makes the best laptops in the world", "claim_type": "subjective"},
+    {"text": "Apple's customer service is incredible", "claim_type": "subjective"}
+  ]
+}
+
 Return a JSON object with this exact structure:
 {
   "claims": [
-    {"text": "The claim text", "claim_type": "verifiable" | "subjective"},
+    {"text": "The statement text", "claim_type": "verifiable" | "subjective"},
     ...
   ]
 }

@@ -1,16 +1,19 @@
 """Shared utilities for LangGraph agent nodes."""
 
 import json
+import re
 
 
 def strip_json_fences(content: str) -> str:
-    """Strip markdown JSON code fences from an LLM response.
+    """Strip markdown JSON code fences and trailing commas from an LLM response.
 
     Handles responses that look like:
         ```json
         { ... }
         ```
     or just plain JSON (returned as-is).
+    Also removes trailing commas before } or ] which are invalid JSON but
+    common in LLM output.
     """
     content = content.strip()
     if content.startswith("```"):
@@ -22,6 +25,8 @@ def strip_json_fences(content: str) -> str:
             if inner.startswith("json"):
                 inner = inner[4:]
             content = inner.strip()
+    # Remove trailing commas before closing braces/brackets (invalid JSON)
+    content = re.sub(r',(\s*[}\]])', r'\1', content)
     return content
 
 

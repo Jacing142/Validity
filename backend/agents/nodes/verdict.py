@@ -13,27 +13,32 @@ from backend.agents.utils import parse_llm_json
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You are a verdict assignment assistant. Given a claim and its weighted evidence, assign a validity verdict.
+SYSTEM_PROMPT = """You are a verdict assignment assistant. Given a claim and its weighted evidence, assign a validity verdict based strictly on these rules.
 
-Verdict definitions:
-- "high": Strong support from multiple sources with no contradictions. Can be high if ALL available sources support the claim consistently, even if they are low-tier, provided there are no contradictions and the claim is a well-established fact.
-- "medium": Mixed evidence, insufficient sources, or only 1-2 sources supporting with no contradictions.
-- "low": Weak or no support, or contradicted by low-tier sources, or fewer than 2 supporting sources.
-- "contradicted": Any high-tier or mid-tier sources directly contradict the claim, OR multiple low-tier sources contradict it.
+RULES — apply in order, stop at the first rule that matches:
 
-Confidence score (0.0–1.0): reflects your certainty in the verdict.
+1. If ANY high-tier or mid-tier source CONTRADICTS the claim → "contradicted"
+2. If 3+ low-tier sources CONTRADICT the claim → "contradicted"  
+3. If there are 5 or more SUPPORTING sources and 0 contradicting sources → "high"
+4. If there are 3-4 SUPPORTING sources and 0 contradicting sources → "high"
+5. If there are 1-2 SUPPORTING sources and 0 contradicting sources → "medium"
+6. If there are 0 supporting sources → "low"
+7. If supporting and contradicting sources are mixed → "medium"
 
-Critical rules:
-- If ALL sources support a claim and NONE contradict it, the verdict should be "high" or "medium" — never "low".
-- "low" requires either active contradiction OR very few supporting sources (1 or fewer).
-- Consistent agreement across multiple sources — even low-tier ones — is meaningful signal. 5+ sources all supporting with 0 contradictions = "high".
-- Reserve "low" for genuine lack of support or active contradiction, not for cases where sources happen to be low-tier but all agree.
+Do NOT factor in source tier when determining high vs medium vs low — tier only matters for rule 1 and 2 (contradictions). A claim supported by 5 low-tier sources with 0 contradictions is "high".
+
+Confidence score (0.0–1.0): 
+- "high" with 5+ sources → 0.85–0.95
+- "high" with 3-4 sources → 0.75–0.85
+- "medium" → 0.50–0.75
+- "low" → 0.30–0.50
+- "contradicted" → 0.80–0.95
 
 Return a JSON object with this exact structure:
 {
   "verdict": "high" | "medium" | "low" | "contradicted",
   "confidence": 0.0–1.0,
-  "reasoning": "One-sentence explanation of the verdict."
+  "reasoning": "One-sentence explanation."
 }
 
 Return ONLY the JSON object, no other text."""

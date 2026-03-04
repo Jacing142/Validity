@@ -197,6 +197,7 @@ async def verify_text_interactive(
         Step 2: Formatted verdict for the selected claims.
     """
     from backend.agents.nodes.decompose import decompose_node
+    from backend.agents.nodes.reformulate import reformulate_node
     from backend.agents.nodes.rank import rank_node
 
     # --- Step 2: look up stored step-1 claims ---
@@ -216,14 +217,15 @@ async def verify_text_interactive(
 
             return await _run_from_approved_claims(text, approved_claims)
 
-    # --- Step 1: decompose + rank ---
+    # --- Step 1: decompose → reformulate → rank ---
     run_id = str(uuid.uuid4())
     logger.info(f"[MCP] verify_text_interactive step 1 preview_id={run_id}")
 
     state = _make_initial_state(text, run_id)
 
-    # Both decompose_node and rank_node are synchronous
+    # decompose is sync; reformulate is async; rank is sync
     state.update(decompose_node(state))
+    state.update(await reformulate_node(state))  # async node
     state.update(rank_node(state))
 
     ranked_claims = state.get("ranked_claims", [])
@@ -275,12 +277,12 @@ async def _run_from_approved_claims(text: str, approved_claims: list[dict]) -> s
     state = _make_initial_state(text, run_id)
     state["approved_claims"] = approved_claims
 
-    # Run pipeline from query_gen (skip decompose/rank/hitl)
+    # Run pipeline from query_gen (skip decompose/reformulate/rank/hitl)
     state.update(query_gen_node(state))
     state.update(await search_node(state))     # async
     state.update(classify_node(state))
-    state.update(weigh_node(state))
-    state.update(verdict_node(state))
+    state.update(await weigh_node(state))      # async
+    state.update(await verdict_node(state))    # async
     state.update(synthesize_node(state))
 
     overall = state.get("overall_verdict")

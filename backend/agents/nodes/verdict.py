@@ -146,6 +146,7 @@ async def verdict_node(state: VerificationState) -> dict:
                 "supporting_evidence": supporting,
                 "contradicting_evidence": contradicting,
                 "sources": sources,
+                "kept_original_subjective": claim.get("kept_original_subjective", False),
             }
 
         # Run all claims concurrently

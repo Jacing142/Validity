@@ -96,7 +96,7 @@ export default function ThoughtPanel({ events, status }) {
   const hasEvents = events.length > 0
 
   return (
-    <div className="flex flex-col h-full bg-gray-950 rounded-xl border border-gray-800 overflow-hidden">
+    <div className="flex flex-col h-full max-h-[60vh] bg-gray-950 rounded-xl border border-gray-800 overflow-hidden">
       {/* Header */}
       <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-800 bg-gray-900">
         <Terminal size={15} className="text-gray-400" />

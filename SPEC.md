@@ -1,458 +1,233 @@
-# VALIDITY — Locked Spec v1
+# Validity: Technical Specification
 
-## One Liner
+## Project brief
 
-An agentic claim-verification system that decomposes text into atomic claims, retrieves web evidence, tiers sources by credibility, and returns structured verdicts — with full agent reasoning visible in real time.
+Validity is an agentic claim-verification system that decomposes text into atomic claims, retrieves adversarial web evidence for each one, tiers sources by credibility, and returns structured per-claim verdicts with full agent reasoning visible in real time. It demonstrates end-to-end agentic AI engineering: LangGraph orchestration, HITL, WebSocket streaming, MCP tool exposure, and configurable multi-provider LLM and search abstraction. The intended audience is technical interviewers and engineers evaluating modern agentic system design.
 
----
+## Built with Claude Code
 
-## What This Showcases
+The entire build was executed using Claude Code. Total time was approximately 5 hours 10 minutes across planning and 5 build phases. Architectural and product decisions, including the HITL implementation strategy, the dual-model LLM pattern, and the asyncio.Event coordination approach, were made collaboratively during the session. This is an honest and notable part of the build process: the codebase was designed, written, debugged, and documented within a single Claude Code session.
 
-| Skill | How It's Used |
-|-------|---------------|
-| **LangGraph** | Full multi-node agent graph with conditional routing, HITL interrupt, parallel execution, and streaming state updates |
-| **LangChain** | LLM abstraction layer, prompt templates, output parsers, configurable model switching |
-| **Agentic AI** | Autonomous multi-step reasoning: decompose → decide → search → classify → weigh → synthesize |
-| **MCP** | Full pipeline exposed as Claude Desktop callable tools with documented integration |
+## Hours breakdown
 
----
+| Phase | Description | Time |
+|-------|-------------|------|
+| Planning | Architecture, stack decisions, product scoping | 1h 30m |
+| Phase 1 | Backend pipeline, LangGraph graph, all nodes, FastAPI | 20m |
+| Phase 2 | WebSocket streaming and Vite/React frontend | 20m |
+| Phase 3 | HITL, LangGraph interrupt, ClaimModal wizard | 40m |
+| Phase 4 | MCP server, Docker Compose, initial docs | 20m |
+| Phase 5 | Iterations, prompt engineering, bug fixes, optimizations | 2h |
+| **Total** | | **5h 10m** |
 
-## Tech Stack
+## Stack decisions
 
-| Layer | Choice | Why |
-|-------|--------|-----|
-| Agent orchestration | LangGraph | Multi-node graph with HITL, streaming, conditional edges |
-| Components | LangChain | LLM abstraction, prompt templates, output parsers |
-| Web search | Serper (default) | Fast, cheap, good structured results. Tavily + You.com as documented alts |
-| LLM | GPT-4o (default) | Cost-effective for iteration. Anthropic as documented alt |
-| Backend | FastAPI | Async-native, WebSocket support, clean API |
-| Frontend | Vite + React | Lightweight, fast builds, no unnecessary SSR |
-| MCP | FastMCP (Python) | Wraps pipeline as Claude Desktop tool |
-| Containerization | Docker Compose | One command to run everything |
+**LangGraph vs plain LangChain chains.** LangGraph was chosen over plain LangChain chains because the pipeline is not a linear sequence: it has conditional routing (HITL approval gating query generation), parallel execution (all search queries fired concurrently, evidence weighing run per-claim in parallel), and a named interrupt point. LangGraph's StateGraph model makes these control flows explicit and composable. A plain chain would require custom orchestration logic that LangGraph provides out of the box.
 
----
+**FastAPI.** FastAPI was chosen for its native async support and first-class WebSocket handling. The pipeline is async throughout: LangGraph runs with `ainvoke()`, search queries execute with `asyncio.gather()`, and HITL coordination uses `asyncio.Event`. A synchronous framework would have required thread-pool workarounds for all of this. FastAPI's automatic OpenAPI generation also provides REST endpoint documentation at no additional cost.
 
-## Agent Flow (LangGraph)
+**Vite and React.** Vite gives near-instant dev server startup and hot module replacement, which matters when iterating on the frontend during a timed build. React was chosen over a lighter alternative because the UI has meaningful stateful complexity: WebSocket connection lifecycle, streaming event ingestion, HITL modal state (claim approval, removal, and addition), and a two-panel layout with independent update streams. Simpler frameworks would have required manual state management that React handles naturally.
 
-```
-Input: pasted paragraph
-  │
-  ▼
-[Node 1] DECOMPOSE
-  LLM extracts all atomic, verifiable claims from the text.
-  Non-verifiable statements (opinions, subjective) are tagged and excluded.
-  │
-  ▼
-[Node 2] RANK + FILTER
-  LLM ranks claims by verifiability and importance.
-  Top N claims selected (configurable, default 5).
-  │
-  ▼
-[HITL] CLAIM REVIEW MODAL
-  Pipeline pauses. WebSocket pushes proposed claims to frontend.
-  User reviews: ✓ approve / ✗ remove / + add custom claim.
-  User confirms → pipeline resumes.
-  │
-  ▼
-[Node 3] GENERATE QUERIES — ADVERSARIAL PAIR (parallel per claim)
-  For each claim, LLM generates two sets of search queries:
-    AFFIRM:  2-3 queries designed to find supporting evidence
-    REFUTE:  2-3 queries designed to find contradicting evidence
-  Example for claim "Global GDP grew 3.2% in 2024":
-    AFFIRM:  "global GDP growth rate 2024", "world economic growth 2024 data"
-    REFUTE:  "global GDP decline 2024", "world economic growth 2024 lower than expected"
-  This is a deliberate design choice. It's easy to find agreement online.
-  Actively trying to disprove a claim is what makes verification meaningful.
-  │
-  ▼
-[Node 4] WEB SEARCH (parallel per claim, both query sets)
-  Serper API (or configured alternative) executes ALL queries (affirm + refute).
-  Results tagged with query intent (affirm/refute) for downstream weighing.
-  Returns top results with titles, snippets, URLs, and intent tag.
-  │
-  ▼
-[Node 5] SOURCE TIER CLASSIFICATION
-  Each source URL classified by credibility tier:
-    High:   .gov / .edu / arxiv / pubmed / known peer-reviewed journals
-    Mid:    Reuters / BBC / AP / major newspaper domains / .org (established)
-    Low:    .com general / vendor blogs / marketing / unknown domains
-  Classification is domain-heuristic in v1 (acknowledged in README).
-  │
-  ▼
-[Node 6] EVIDENCE WEIGHING (parallel per claim)
-  LLM analyzes each source's content against the claim.
-  Classifies as: SUPPORTS / CONTRADICTS / IRRELEVANT.
-  Weighs by source tier (High source contradiction > Low source support).
-  │
-  ▼
-[Node 7] VERDICT ASSIGNMENT (per claim)
-  Based on weighted evidence:
-    HIGH VALIDITY    — strong support from high/mid tier, no contradictions
-    MEDIUM VALIDITY  — mixed support, or only low-tier sources
-    LOW VALIDITY     — weak/no support, or contradicted by credible sources
-    CONTRADICTED     — flag when high-tier sources directly contradict
-  │
-  ▼
-[Node 8] SYNTHESIZE
-  Aggregates per-claim verdicts into overall paragraph verdict.
-  Weighted by claim importance from Node 2.
-  Produces final structured output.
-```
+**ChromaDB (considered, removed).** ChromaDB was initially considered to cache search results and source embeddings across runs, supporting a RAG-style evidence retrieval layer. It was removed because the added complexity (embedding pipeline, vector store management, cache invalidation) was not justified for the v1 scope, where each run is independent and web search results are fetched fresh. The architecture is cleaner without it; document upload and RAG are explicitly in the V2 roadmap.
+
+**FastMCP.** FastMCP was chosen to expose the pipeline as Claude Desktop tools because it reduces MCP server boilerplate to a decorator pattern. The `@mcp.tool` decorator handles tool registration, schema generation, and protocol compliance. The alternative (implementing the MCP protocol directly) would have added significant infrastructure code with no product benefit for this scope.
+
+**Docker Compose.** Docker Compose provides a single-command deployment of the backend and frontend with environment variable injection via `.env`. It was chosen over bare Docker commands or a more complex orchestration layer because the deployment model is two services with a simple proxy, and Compose handles that cleanly without operational overhead.
+
+## Build phases
+
+**Planning.** Architecture decisions were made before any code was written: the LangGraph node sequence, the dual-model LLM strategy, the HITL approach selection (asyncio.Event vs MemorySaver), the WebSocket event schema, and the search provider abstraction interface. The state schema was defined upfront as a TypedDict to ensure all nodes shared a consistent contract. The checkpoint for this phase was a fully-specified architecture document with the exact node graph, LLM call map, and API contract.
+
+**Phase 1: Backend pipeline.** The FastAPI skeleton, LangGraph graph, and all pipeline nodes were built: decompose, rank, query generation, web search (Serper), source classification, evidence weighing, verdict assignment, and synthesis. The graph was wired with edges and conditional routing. The checkpoint was a working backend that accepted text via a POST endpoint and returned a structured verdict JSON synchronously. All LLM calls were working against real models, and the pipeline produced correct output end-to-end.
+
+**Phase 2: WebSocket streaming and frontend.** A WebSocket endpoint was added to FastAPI, and a custom `StreamingCallbackHandler` was built to capture node events and push them to connected clients. The React frontend was scaffolded with Vite: InputPanel for text submission, ThoughtPanel for the live event stream, and VerdictPanel for the structured results. The checkpoint was a working two-panel web app where pasting text and submitting produced a live stream of agent events followed by a rendered verdict.
+
+**Phase 3: HITL.** The HITL node was added to the graph between rank and query generation. The node emits a `hitl_request` event over WebSocket, awaits an `asyncio.Event`, and resumes when the WebSocket handler sets it on receipt of a `hitl_response` from the client. The ClaimModal component was built in React: a step-by-step wizard for approving, removing, and adding claims before the pipeline continues. The checkpoint was an end-to-end interactive run with a visible pause, claim review, and pipeline resumption.
+
+**Phase 4: MCP server, Docker Compose, initial docs.** The FastMCP server was built exposing three tools: `verify_text`, `verify_text_interactive`, and `get_run`. Docker Compose was configured with backend and frontend services. An `.env.example` was documented with all provider options. Initial README and SPEC were drafted. The checkpoint was a fully deployable, MCP-integrated system that could be started with `docker compose up` and used from Claude Desktop.
+
+**Phase 5: Iterations, prompt engineering, bug fixes, optimizations.** This phase covered everything that broke under real inputs: false contradictions on numerical approximations in the weigh node, overly conservative verdict scoring in the verdict node, HITL event coordination edge cases, the reformulate node being added to handle subjective claims, and source tier classification being extended with an LLM fallback for unknown domains. See the Iterations and fixes section for detail on each.
+
+## Architecture deep dive
+
+### Decompose
+
+**Purpose:** Extract every atomic statement from the input text, including both verifiable facts and subjective opinions. No filtering is applied at this stage: the decompose node's job is exhaustive extraction, not judgment.
+
+**Inputs:** `input_text` (string)
+
+**Outputs:** `claims` (list of dicts with id, text, claim_type, importance_score, original_text, reformulation_options)
+
+**LLM call:** Yes, `complexity="high"`. Decomposition is the hardest call in the pipeline: the model must parse natural language, identify every assertive statement, and tag each as `verifiable` or `subjective`. A weaker model produces noisy claims that cascade errors downstream.
+
+**Key implementation note:** The node extracts all statements up to a maximum of 8, including opinions and superlatives, and does not filter. The prompt instruction "if you are unsure whether to include something, INCLUDE IT and tag it subjective" was critical: earlier versions filtered aggressively and missed verifiable claims embedded in subjective phrasing.
 
 ---
 
-## HITL — Why It Matters
+### Reformulate
 
-This isn't a UX feature. It's a named pattern in agentic systems.
+**Purpose:** For subjective claims, generate two alternative wordings that are more searchable: a cleaner version and a specific, quantifiable version. Verifiable claims pass through unchanged.
 
-**The problem:** An LLM decomposing a paragraph will extract 8-15 claims. Many will be trivial ("The meeting was held on Tuesday"). Verifying all of them wastes search API calls, LLM tokens, and user attention.
+**Inputs:** `claims` (from decompose)
 
-**The solution:** The pipeline pauses after decomposition and ranking. The user sees the proposed claims in a modal. They approve the ones worth verifying, remove noise, and optionally add claims the LLM missed. Then the pipeline continues with a focused, user-validated set.
+**Outputs:** `claims` (updated, with `reformulation_options` populated for subjective claims)
 
-**Implementation:** LangGraph's `interrupt()` function. The graph state is checkpointed. The frontend receives the proposed claims via WebSocket. On user confirmation, the graph resumes from the checkpoint with the updated claim list.
+**LLM call:** Yes, `complexity="standard"`, but only for subjective claims. Verifiable claims return immediately without an LLM call.
 
----
-
-## Frontend — Two Panel Layout
-
-### Left Panel (primary)
-1. **Input area** — textarea for pasting paragraphs. Submit button.
-2. **HITL modal** — fires mid-run after Node 2. Shows ranked claims with approve/remove/add controls. "Continue" button resumes pipeline.
-3. **Verdict display** — structured results per claim:
-   - Claim text
-   - Verdict badge (High / Mid / Low / Contradicted)
-   - Sources listed with tier indicator (color-coded)
-   - Supporting vs contradicting evidence, one line each
-4. **Overall verdict** — aggregated score at top of results
-
-### Right Panel (agent thought stream)
-- Real-time feed of every LangGraph node as it fires
-- Each entry shows: node name, what it's doing, intermediate results
-- Examples: "Decomposing into claims... found 7", "Searching: 'global temperature 2024 data'", "Source classified: nasa.gov → HIGH tier"
-- Scrolling log format, newest at bottom
-- **This is the demo moment.** A hiring manager watches claims being verified in real time.
-
-### Implementation
-- WebSocket connection from frontend to FastAPI
-- LangGraph streams state updates via `astream_events()` or custom callbacks
-- Each node emits structured events: `{ node: "search", claim_id: 2, status: "searching", detail: "query: 'GDP growth 2024 US'" }`
-- Frontend renders these as they arrive
+**Key implementation note:** The node runs a single batched LLM call for all subjective claims, rather than one call per claim, to minimise latency. On failure, the node passes claims through unchanged and continues the pipeline, ensuring a failure here does not terminate a run.
 
 ---
 
-## Streaming Architecture
+### Rank
 
-```
-LangGraph Node fires
-  │
-  ▼
-Custom callback handler captures node entry/exit + intermediate state
-  │
-  ▼
-FastAPI WebSocket endpoint pushes event to connected client
-  │
-  ▼
-React state updates → ThoughtPanel re-renders
-```
+**Purpose:** Score every claim on verifiability (how easily it can be checked with public sources) and importance (how central it is to the text's meaning), then select the top N for verification.
 
-**Key decision:** Use LangGraph's callback system, not polling. The frontend opens one WebSocket at run start and receives all updates push-style. No polling, no SSE complexity.
+**Inputs:** `claims` (from reformulate)
 
-**HITL flow over WebSocket:**
-1. Graph hits HITL node → emits `{ type: "hitl_request", claims: [...] }`
-2. Frontend shows modal
-3. User confirms → frontend sends `{ type: "hitl_response", approved_claims: [...] }` over same WebSocket
-4. Backend resumes graph with updated state
+**Outputs:** `ranked_claims` (top N claims sorted by combined score)
+
+**LLM call:** Yes, `complexity="standard"`. Scoring is a structured task with defined criteria and bounded output: a mid-tier model handles it reliably.
+
+**Key implementation note:** The combined score is the average of verifiability and importance. Claims are sorted descending and truncated to `MAX_CLAIMS` (configurable, default 5). The rank node sets `ranked_claims` but does not set `approved_claims`: that is the HITL node's responsibility.
 
 ---
 
-## MCP Server
+### HITL
 
-### What It Exposes
+**Purpose:** Pause the pipeline, emit ranked claims to the connected frontend for user review, and wait until the user approves, removes, or adds claims and confirms.
 
-Three tools:
+**Inputs:** `ranked_claims`
 
-| Tool | Input | Output |
-|------|-------|--------|
-| `verify_text` | `{ text: string }` | Full verdict JSON (skips HITL, auto-approves all claims) |
-| `verify_text_interactive` | `{ text: string }` | Returns proposed claims first, then accepts approved list |
-| `get_run` | `{ run_id: string }` | Retrieves a previous run's results |
+**Outputs:** `approved_claims` (the user-validated subset, potentially with custom claims added)
 
-### Implementation
-- Built with FastMCP (Python)
-- Calls the same LangGraph pipeline the web UI uses
-- `verify_text` runs the full graph with HITL auto-approved (for non-interactive use)
-- `verify_text_interactive` uses MCP's sampling/confirmation pattern for HITL equivalent
-- Documented in README with Claude Desktop config JSON and usage GIF
+**LLM call:** No.
 
-### Claude Desktop Config
-```json
-{
-  "mcpServers": {
-    "validity": {
-      "command": "python",
-      "args": ["-m", "validity.mcp.server"],
-      "env": {
-        "SEARCH_API_KEY": "your-serper-key",
-        "LLM_API_KEY": "your-openai-key"
-      }
-    }
-  }
-}
-```
+**Key implementation note:** The node operates in two modes. In interactive mode (WebSocket run), it awaits a per-run `asyncio.Event` stored on the `StreamingCallbackHandler`; the WebSocket handler sets this event when the client sends a `hitl_response` message. In skip mode (MCP call, sync endpoint, or test), no event exists and the node auto-approves all ranked claims immediately. A 5-minute timeout auto-approves if the user does not respond. Custom claims added in the modal are assigned new UUIDs and validated (empty text and claims over 500 characters are rejected).
 
 ---
 
-## API Endpoints
+### No Claims
 
-```
-POST /api/verify
-  Body: { text: string }
-  Returns: { run_id: string }
-  Starts verification pipeline. Connect to WebSocket for updates.
+**Purpose:** Handle the zero-approved-claims edge case without crashing the pipeline. Sets a minimal `overall_verdict` and routes to END.
 
-WS /api/verify/{run_id}/stream
-  Streams all node events + HITL request.
-  Accepts HITL response from client.
+**Inputs:** `approved_claims` (empty list, determined by the conditional router after HITL)
 
-GET /api/verify/{run_id}/result
-  Returns final verdict JSON (poll fallback if WebSocket isn't available).
+**Outputs:** `overall_verdict` (with `total_claims=0` and a descriptive summary)
 
-GET /api/health
-  Returns { status: "ok", search_provider: "serper", llm_provider: "openai" }
-```
+**LLM call:** No.
+
+**Key implementation note:** This node is reached via a conditional edge from HITL: if `approved_claims` is empty, the router selects `no_claims` rather than `query_gen`. This prevents all downstream nodes from receiving empty claim lists and ensures the frontend receives a well-formed `pipeline_complete` event.
 
 ---
 
-## Configuration
+### Query Gen
 
-### `.env.example`
-```bash
-# LLM Configuration
-LLM_PROVIDER=openai                   # openai | anthropic
-LLM_API_KEY=sk-...
-LLM_MODEL_COMPLEX=gpt-4o             # Complex tasks: decompose, evidence weighing
-LLM_MODEL_STANDARD=gpt-4o-mini       # Structured tasks: rank, query gen, verdict, synthesis
-# Anthropic equivalents: claude-sonnet-4-20250514 / claude-haiku-4-5-20251001
+**Purpose:** For each approved claim, generate a set of adversarial search queries: affirm queries designed to find supporting evidence, and refute queries designed to find contradicting evidence.
 
-# Search Configuration
-SEARCH_PROVIDER=serper        # serper | tavily | you
-SEARCH_API_KEY=...
+**Inputs:** `approved_claims`
 
-# Application
-MAX_CLAIMS=5                  # Max claims to verify per run
-MAX_SOURCES_PER_CLAIM=5       # Max search results per claim
-LOG_LEVEL=info
-```
+**Outputs:** `search_queries` (list of query objects with claim_id, intent, and query text)
 
-### Provider Abstraction
-Both LLM and search are behind interfaces. Switching providers is a `.env` change, not a code change.
+**LLM call:** Yes, `complexity="standard"`. Generating effective refute queries requires semantic understanding of the claim to produce targeted counter-searches.
 
-```python
-# LLM — dual model pattern
-llm_complex = get_llm(complexity="high")      # decompose, weigh evidence
-llm_standard = get_llm(complexity="standard") # rank, query gen, verdict, synthesis
-
-# Search — thin wrapper
-search = get_search_client(provider=settings.SEARCH_PROVIDER, api_key=settings.SEARCH_API_KEY)
-```
+**Key implementation note:** The adversarial pair design is deliberate. It is easy to find agreement online for almost any claim. Actively searching for contradictions is what makes verification meaningful rather than confirmation search dressed as fact-checking. The prompt treats refute queries as "critical" and examples are constructed to produce genuinely adversarial queries, not just negations of the affirm queries.
 
 ---
 
-## Repo Structure
+### Search
 
-```
-validity/
-├── backend/
-│   ├── agents/
-│   │   ├── graph.py              # LangGraph graph definition + edges
-│   │   ├── state.py              # Graph state schema (TypedDict)
-│   │   ├── callbacks.py          # Streaming callback handler
-│   │   └── nodes/
-│   │       ├── decompose.py      # Node 1: extract atomic claims
-│   │       ├── rank.py           # Node 2: rank + filter claims
-│   │       ├── hitl.py           # HITL: interrupt + resume
-│   │       ├── query_gen.py      # Node 3: generate search queries
-│   │       ├── search.py         # Node 4: execute web search
-│   │       ├── classify.py       # Node 5: source tier classification
-│   │       ├── weigh.py          # Node 6: evidence weighing
-│   │       ├── verdict.py        # Node 7: per-claim verdict
-│   │       └── synthesize.py     # Node 8: overall verdict
-│   ├── search/
-│   │   ├── base.py               # Abstract search interface
-│   │   ├── serper.py             # Serper implementation
-│   │   ├── tavily.py             # Tavily implementation
-│   │   └── you.py                # You.com implementation
-│   ├── config.py                 # Settings from .env
-│   ├── models.py                 # Pydantic models for API + state
-│   └── main.py                   # FastAPI app + WebSocket + endpoints
-├── mcp/
-│   └── server.py                 # FastMCP server wrapping pipeline
-├── frontend/
-│   ├── src/
-│   │   ├── components/
-│   │   │   ├── InputPanel.jsx    # Text input + submit
-│   │   │   ├── ClaimModal.jsx    # HITL claim review modal
-│   │   │   ├── VerdictPanel.jsx  # Per-claim + overall verdicts
-│   │   │   └── ThoughtPanel.jsx  # Live agent reasoning stream
-│   │   ├── hooks/
-│   │   │   └── useVerify.js      # WebSocket connection + state management
-│   │   ├── App.jsx
-│   │   └── main.jsx
-│   ├── index.html
-│   ├── package.json
-│   └── vite.config.js
-├── docker-compose.yml            # backend + frontend services
-├── .env.example
-├── Makefile                      # make run, make dev, make test
-└── README.md
-```
+**Purpose:** Execute all search queries concurrently against the configured search provider, tag each result with its claim_id and query intent, and deduplicate by URL within each claim.
+
+**Inputs:** `search_queries`
+
+**Outputs:** `search_results` (all results tagged with claim_id, query_intent, and a null source_tier placeholder)
+
+**LLM call:** No. Uses the configured search API (Serper, Tavily, or You.com).
+
+**Key implementation note:** All queries are fired in parallel with `asyncio.gather()`. A per-claim URL deduplication pass runs after collection to prevent the same source appearing multiple times for the same claim across different query variants. Individual query failures are caught and logged without stopping the batch.
 
 ---
 
-## Source Tier Classification — Honest Framing
+### Classify
 
-The v1 source tier system uses domain-based heuristics. This is a deliberate, acknowledged limitation.
+**Purpose:** Assign a credibility tier (high, mid, or low) to each search result based on its source domain.
 
-**What it does well:**
-- `.gov`, `.edu`, `arxiv.org`, `pubmed` → reliably high credibility signals
-- Known news wire services (Reuters, AP, AFP) → reliably mid-high
-- Marketing/vendor domains → reliably low
+**Inputs:** `search_results`
 
-**Where it breaks:**
-- A `.edu` professor's personal blog ≠ a peer-reviewed paper
-- A `.com` investigative journalism piece can be excellent
-- Domain age, author credentials, citation count — none of this is captured
+**Outputs:** `classified_results` (all results with `source_tier` populated)
 
-**README framing:** "v1 uses domain heuristics for source classification. This is fast and directionally correct for most sources, but doesn't capture nuance. An ML-based credibility classifier is on the v2 roadmap."
+**LLM call:** Yes, but only as a fallback. Known high-credibility domains (`.gov`, `.edu`, `arxiv.org`, peer-reviewed journals, major health agencies) and known mid-credibility domains (Reuters, BBC, AP, Wikipedia, established newspapers) are classified by heuristic with no LLM call. Only domains that fall through to the default low tier and are unknown are sent to the LLM for a second opinion.
+
+**Key implementation note:** Classification runs concurrently for all results. Heuristic results return instantly; only unknown domains incur LLM latency. The fallback prompt asks the model to classify by domain type (government, academic, news, blog) and return a one-sentence reasoning used for the callback event detail.
 
 ---
 
-## LLM Call Map
+### Weigh
 
-Every LLM call in the pipeline, what it does, and which model to use.
+**Purpose:** For each approved claim, assess every associated source: does it SUPPORT, CONTRADICT, or is it IRRELEVANT to the specific claim? Apply tier-based weights to each assessment.
 
-### Call inventory per run (assuming 5 claims approved)
+**Inputs:** `classified_results`, `approved_claims`
 
-| Node | Call | What it does | Complexity | Recommended model | Calls per run |
-|------|------|-------------|------------|-------------------|---------------|
-| Node 1: Decompose | `decompose_claims` | Extract atomic, verifiable claims from input text. Must distinguish facts from opinions. | High — requires nuanced reasoning about what constitutes a verifiable claim | GPT-4o | 1 |
-| Node 2: Rank | `rank_claims` | Score claims by verifiability + importance. Select top N. | Medium — ranking against criteria | GPT-4o-mini | 1 |
-| Node 3: Query Gen | `generate_queries` | Generate affirm + refute search queries per claim | Medium — needs understanding of claim semantics to write good counter-queries | GPT-4o-mini | 5 (1 per claim) |
-| Node 5: Classify | — | Source tier classification | **No LLM call** — pure domain heuristic logic | N/A | 0 |
-| Node 6: Weigh | `weigh_evidence` | Read each source snippet, classify as SUPPORTS / CONTRADICTS / IRRELEVANT relative to the claim | High — must understand nuance, partial support, implicit contradiction | GPT-4o | 5 (1 per claim) |
-| Node 7: Verdict | `assign_verdict` | Given weighted evidence, assign verdict + confidence | Medium — structured decision from clear inputs | GPT-4o-mini | 5 (1 per claim) |
-| Node 8: Synthesize | `synthesize_verdict` | Aggregate per-claim verdicts into overall assessment | Medium — summary + weighting | GPT-4o-mini | 1 |
+**Outputs:** `evidence_assessments` (one assessment per source-claim pair, with weight)
 
-### Total LLM calls per run: 18
+**LLM call:** Yes, `complexity="high"`. Assessing whether a search snippet supports or contradicts a specific claim requires genuine comprehension: partial support, implicit contradiction, and tangential relevance are all distinct cases a weaker model conflates.
 
-| Model | Calls | Purpose |
-|-------|-------|---------|
-| GPT-4o | 6 | Decomposition (1) + evidence weighing (5) — the calls where reasoning quality matters most |
-| GPT-4o-mini | 12 | Ranking (1) + query gen (5) + verdict (5) + synthesis (1) — structured, lower-complexity tasks |
-
-### Cost estimate per run (5 claims)
-- GPT-4o calls: ~6 calls × ~1K tokens avg = ~6K tokens → ~$0.03
-- GPT-4o-mini calls: ~12 calls × ~500 tokens avg = ~6K tokens → ~$0.001
-- Search API: ~20 queries × $0.001 (Serper) = ~$0.02
-- **Total: ~$0.05 per verification run**
-
-### Model selection rationale
-
-**GPT-4o for decomposition:** This is the hardest call in the pipeline. The LLM must read a paragraph, identify every factual claim, separate facts from opinions, and output clean atomic statements. A weaker model produces noisy claims that cascade errors downstream.
-
-**GPT-4o for evidence weighing:** Reading a search snippet and determining if it supports, contradicts, or is irrelevant to a specific claim requires genuine comprehension. Partial support, implicit contradiction, tangential relevance — this is where model quality directly affects verdict accuracy.
-
-**GPT-4o-mini for everything else:** Ranking, query generation, verdict assignment, and synthesis are all structured tasks with clear inputs and constrained outputs. Mini handles these well and keeps costs down.
-
-### Provider switching
-
-When the user sets `LLM_PROVIDER=anthropic`, the model mapping becomes:
-
-| Role | OpenAI | Anthropic |
-|------|--------|-----------|
-| Complex (decompose, weigh) | GPT-4o | Claude Sonnet 4 |
-| Structured (rank, query, verdict, synthesize) | GPT-4o-mini | Claude Haiku 4.5 |
-
-This is configured in `backend/config.py` and transparent to the nodes — they call `get_llm(complexity="high")` or `get_llm(complexity="standard")` and the config resolves the model.
+**Key implementation note:** Evidence weighing runs parallel per claim with `asyncio.gather()`. Tier weights are: high = 1.0, mid = 0.6, low = 0.3. The system prompt includes explicit rules for numerical approximations and rounding, date ranges, and partial information, added to fix a class of false contradiction bugs found during Phase 5.
 
 ---
 
-## README Structure
+### Verdict
 
-1. **One liner** — sharp, memorable
-2. **Demo GIF** — the two-panel UI with claims being verified in real time
-3. **Tech stack table**
-4. **What it is** — 2 paragraphs: problem → how Validity works → what you get
-5. **Architecture** — the agent flow diagram from this spec (Mermaid or clean ASCII)
-6. **How to run** — clone → `.env` → `docker compose up` → open browser. Under 60 seconds.
-7. **MCP integration** — Claude Desktop config + usage example
-8. **Design decisions** — HITL rationale, source tier honesty, provider abstraction
-9. **Build breakdown** — hours spent on planning / backend / frontend / MCP / debugging
-10. **V2 roadmap**
+**Purpose:** Assign a validity verdict (high, medium, low, or contradicted) to each claim based on its weighted evidence, using an explicit rule-based prompt.
 
----
+**Inputs:** `evidence_assessments`, `approved_claims`, `classified_results`
 
-## V2 Roadmap
+**Outputs:** `claim_verdicts` (one verdict per claim with confidence score and split supporting/contradicting evidence lists)
 
-- **ML source credibility classifier** — beyond domain heuristics, using features like domain authority, publication type, author signals
-- **Citation verification mode** — paste text with citations, verify claims against their own cited sources
-- **Batch mode** — process multiple paragraphs/documents in queue
-- **Browser extension** — highlight text on any page, right-click → verify with Validity
-- **Full REST API** — documented endpoints for third-party integration
-- **Claim history** — store past verifications, detect when claims become outdated
+**LLM call:** Yes, `complexity="standard"`. The verdict assignment uses a structured prompt with 8 explicit rules applied in priority order: tier-level contradictions trigger "contradicted" first; support counts then determine high, medium, or low.
+
+**Key implementation note:** Verdict assignment runs parallel per claim. The prompt was rewritten in Phase 5 after discovering the original version returned "low" for claims with 8 supporting sources but no contradictions. The explicit rule "5 or more SUPPORTING sources and 0 contradicting sources = high" and "do NOT factor in source tier when determining high vs medium vs low" were added to fix this.
 
 ---
 
-## Build Order (Priority Sequence)
+### Synthesize
 
-This is the order things get built. Each phase produces a working system.
+**Purpose:** Aggregate all per-claim verdicts into a single overall verdict (high, medium, low, or mixed) with a 2 to 3 sentence natural language summary.
 
-### Phase 1: Core Pipeline (~8 hours)
-1. FastAPI skeleton with health endpoint
-2. LangGraph graph with state schema
-3. Nodes 1-2: decompose + rank (LLM calls working)
-4. Nodes 3-4: query generation + Serper search
-5. Nodes 5-7: classify + weigh + verdict
-6. Node 8: synthesize
-7. End-to-end test: paste text → get verdict JSON from API
+**Inputs:** `claim_verdicts`, `approved_claims`
 
-**Checkpoint:** Working backend. Paste text via curl, get structured verdict.
+**Outputs:** `overall_verdict` (verdict string, summary, counts by verdict type, and the full claim_verdicts list)
 
-### Phase 2: Streaming + Frontend (~6 hours)
-1. WebSocket endpoint + callback handler
-2. React app scaffold (Vite)
-3. InputPanel + basic submit flow
-4. ThoughtPanel consuming WebSocket events
-5. VerdictPanel rendering results
-6. Two-panel layout, responsive
+**LLM call:** Yes, `complexity="standard"`. The synthesis prompt accounts for claim importance scores from the rank node when weighting the overall assessment.
 
-**Checkpoint:** Working web app. Paste text, watch agent work, see verdict.
-
-### Phase 3: HITL (~3 hours)
-1. LangGraph interrupt at rank node
-2. WebSocket HITL event emission
-3. ClaimModal component
-4. Resume flow on user confirmation
-5. End-to-end HITL test
-
-**Checkpoint:** Full interactive pipeline with human-in-the-loop.
-
-### Phase 4: MCP + Polish (~3 hours)
-1. FastMCP server with `verify_text` + `verify_text_interactive`
-2. Claude Desktop config + manual test
-3. Docker Compose (backend + frontend)
-4. `.env.example` with all options documented
-5. README with architecture diagram, run instructions, MCP setup
-6. Demo GIF recording
-
-**Checkpoint:** Deployable, documented, MCP-integrated.
+**Key implementation note:** A heuristic fallback is implemented for the case where the LLM call fails: if contradicted_count > 0 the overall verdict is "mixed"; if high_count is 70% or more of total it is "high"; if low_count is 50% or more it is "low"; otherwise "medium". This ensures the pipeline always produces a usable result even under LLM failure.
 
 ---
 
-## What This Is NOT
+## Iterations and fixes
 
-- Not a fact-checking oracle. It retrieves evidence and presents it. The verdict is a structured summary, not ground truth.
-- Not a document analysis tool. No RAG, no vector stores. Paste text in, get verification out.
-- Not a research tool. It verifies specific claims, not open-ended questions.
+**Weigh node false contradictions on numerical approximations.** During Phase 5 testing with real inputs, the weigh node was flagging sources as CONTRADICTS when they cited rounded figures. A source saying "approximately 365 days" was being called a contradiction of "365.25 days". The fix was a detailed set of rules added to the system prompt: approximations within 10% are SUPPORTS, rounded date figures are SUPPORTS, and CONTRADICTS requires clear, direct disagreement. The prompt explicitly lists non-examples ("Water boils at 100 degrees" as a source for a "100°C" claim = SUPPORTS) to anchor the model's behavior on the boundary cases.
 
-This keeps the scope honest and the architecture clean.
+**Verdict node returning LOW for claims with 8 supporting sources.** The original verdict prompt was underspecified: it described verdicts qualitatively without numeric thresholds. Under real inputs, the model was returning "low" for claims with many supporting sources because the sources were low-tier (general .com domains). The fix was a complete prompt rewrite with an explicit 8-rule priority sequence. The key additions: source tier is irrelevant when determining high, medium, or low (it only matters for contradiction rules), and 3 or more supporting sources with 0 contradictions is "high."
+
+**HITL asyncio.Event vs LangGraph native interrupt.** The Phase 3 HITL implementation required a choice between two approaches. LangGraph's native interrupt pattern (MemorySaver checkpointer, `GraphInterrupt` exception, `Command(resume=...)` re-invocation) would have required refactoring the Phase 2 invocation model, which used `ainvoke()` in a single async call. The `asyncio.Event` approach was chosen because it required no changes to the existing invocation pattern: the event is stored on the per-run callback handler, awaited inside the HITL node, and set by the WebSocket handler when the client responds. Both run in the same event loop. The tradeoff is that this approach does not support multi-process or distributed deployment of the pipeline, which is outside the v1 scope.
+
+**Decompose node filtering subjective claims, attempts made, current known limitation.** The original decompose prompt instructed the model to filter out opinions, superlatives, and subjective assertions. This caused the pipeline to miss verifiable claims embedded in subjective phrasing: "This company has the most efficient supply chain in the industry" contains a verifiable competitiveness claim that was being dropped. Multiple prompt variants were tried, including a separate filter pass and confidence-weighted extraction. The final approach was to remove all filtering from decompose entirely. The node now extracts everything and tags each claim as verifiable or subjective. The reformulate node was added as a dedicated step to generate more searchable wordings for subjective claims. The remaining known limitation is that reformulation quality varies: the model sometimes produces alternatives that are not meaningfully more searchable than the original.
+
+**Source tier classification evolution.** The initial classifier was pure domain heuristics: a fixed allowlist of high and mid domains, with everything else defaulting to low. This worked well for known sources but produced low-tier classifications for legitimate but unlisted sources. An LLM fallback was added for the unknown low-tier case: the model is given the domain name, URL, and snippet and asked to classify by source type (academic, government, news, blog). The fallback only fires for sources that did not match the heuristic lists, keeping latency low for the common case.
+
+## What's next / V2
+
+**Document upload and RAG.** Users occasionally want to verify claims in longer documents, not just pasted paragraphs. Document upload with a chunking and embedding pipeline was considered for v1 but deprioritised: it would have added ChromaDB, an embedding model, and a retrieval interface, tripling the infrastructure surface area. For v1, the value is in the agentic pipeline and real-time UX, not document management. This is the most natural v2 extension.
+
+**GraphRAG.** GraphRAG (entity and relationship extraction over document corpora, with graph-based retrieval) was evaluated as a way to improve evidence coverage for claim verification. It was not included in v1 because it requires a document corpus to be meaningful, which in turn requires the document upload feature. Without that, GraphRAG adds infrastructure with no input to retrieve over.
+
+**RAGAS eval.** RAGAS is an evaluation framework for RAG and retrieval-augmented LLM pipelines. Adding automated evaluation of verdict accuracy against ground-truth datasets would make the pipeline measurable and improvable systematically. It was deprioritised in v1 because there is no labelled ground-truth dataset for the claims being verified, and building one is a significant effort in its own right. This becomes relevant once the core pipeline is stable and iteration moves from correctness to optimisation.
+
+**Citation verification.** A dedicated mode where users paste text that already contains citations, and the pipeline verifies each claim against its own cited source rather than performing open web search. This is a narrower, more precise verification task and was considered for v1. It was deprioritised because it requires a different retrieval path (fetch and parse specific URLs rather than open search queries) and the general web search mode demonstrates the more interesting agentic behaviour.
+
+**Browser extension.** A browser extension would let users highlight text on any page and trigger verification in one click, removing the copy-paste step. The product value is clear. It was deprioritised in v1 because browser extension development (manifest, content script, background service worker) is a distinct engineering surface that would have dominated Phase 4 time without demonstrating anything new about the core pipeline.
+
+**ML source credibility classifier.** The v1 domain heuristic classifier is directionally correct but coarse. An ML classifier using domain authority scores, publication type signals, author credibility, and citation counts would be more accurate, especially for the long tail of unknown domains. It was deprioritised because building a quality training dataset for source credibility is a significant data engineering effort, and the LLM fallback covers the unknown-domain case adequately for v1 purposes.
+
+**Persistent run storage.** The current run store is in-memory: runs are lost on server restart, and the web UI and MCP server each have their own isolated store. A persistent store (Postgres, SQLite, or Redis) would enable run history, cross-session retrieval, and shared access between deployment modes. It was deprioritised in v1 because persistence adds operational complexity (database provisioning, migrations, connection pooling) that is not necessary to demonstrate the pipeline. The in-memory approach is honest and documented as a known limitation.

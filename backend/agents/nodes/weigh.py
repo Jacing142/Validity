@@ -27,7 +27,10 @@ Definitions:
 - IRRELEVANT: the source does not directly address the specific claim
 
 Critical rules for accurate assessment:
+- **When a claim uses "around", "approximately", or "about", treat it as a range of ±10% or ±5 years for dates.** Sources within that range SUPPORT the claim.
 - **Rounding and approximations are NOT contradictions.** If a claim says "365.25 days" and a source says "approximately 365 days" or "about 365 days", that source SUPPORTS the claim — it is using a rounded figure, not disputing the precise value.
+- **Date approximations are NOT contradictions.** If a claim says "around 1600" and a source says "1599-1601", that SUPPORTS the claim. Only contradict if the source gives a date meaningfully outside the stated range.
+- **Authorship disputes are NOT the same as date disputes.** A source questioning WHO wrote something does not contradict WHEN it was written.
 - **Partial information is NOT a contradiction.** A source that confirms part of a claim without mentioning the rest is SUPPORTS or IRRELEVANT, not CONTRADICTS.
 - **CONTRADICTS requires clear, direct disagreement.** Only use CONTRADICTS when a source explicitly states the claim is wrong, provides a meaningfully different figure, or directly disputes the claim's core assertion.
 - **Be conservative with CONTRADICTS.** When in doubt between SUPPORTS and CONTRADICTS, choose SUPPORTS if the source is broadly consistent with the claim.

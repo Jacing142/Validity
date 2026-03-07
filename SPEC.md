@@ -2,11 +2,13 @@
 
 ## Project brief
 
-Validity is an agentic claim-verification system that decomposes text into atomic claims, retrieves adversarial web evidence for each one, tiers sources by credibility, and returns structured per-claim verdicts with full agent reasoning visible in real time. It demonstrates end-to-end agentic AI engineering: LangGraph orchestration, HITL, WebSocket streaming, MCP tool exposure, and configurable multi-provider LLM and search abstraction. The intended audience is technical interviewers and engineers evaluating modern agentic system design.
+Validity is an agentic claim-verification system. It decomposes text into atomic claims, retrieves adversarial web evidence for each, tiers sources by credibility, and returns structured per-claim verdicts with full agent reasoning visible in real time.
+
+It demonstrates end-to-end agentic AI engineering: LangGraph orchestration, HITL, WebSocket streaming, MCP tool exposure, and configurable multi-provider LLM and search abstraction. The intended audience is technical interviewers and engineers evaluating modern agentic system design.
 
 ## Built with Claude Code
 
-The entire build was executed using Claude Code. Total time was approximately 5 hours 10 minutes across planning and 5 build phases. Architectural and product decisions, including the HITL implementation strategy, the dual-model LLM pattern, and the asyncio.Event coordination approach, were made collaboratively during the session. This is an honest and notable part of the build process: the codebase was designed, written, debugged, and documented within a single Claude Code session.
+The entire build was executed using Claude Code. Total time was approximately 5 hours 10 minutes across planning and 5 build phases. Architectural and product decisions, including the HITL implementation strategy, the dual-model LLM pattern, and the asyncio.Event coordination approach, were made collaboratively during the session.
 
 ## Hours breakdown
 
@@ -102,7 +104,13 @@ The entire build was executed using Claude Code. Total time was approximately 5 
 
 **LLM call:** No.
 
-**Key implementation note:** The node operates in two modes. In interactive mode (WebSocket run), it awaits a per-run `asyncio.Event` stored on the `StreamingCallbackHandler`; the WebSocket handler sets this event when the client sends a `hitl_response` message. In skip mode (MCP call, sync endpoint, or test), no event exists and the node auto-approves all ranked claims immediately. A 5-minute timeout auto-approves if the user does not respond. Custom claims added in the modal are assigned new UUIDs and validated (empty text and claims over 500 characters are rejected).
+**Key implementation note:** The node operates in two modes. 
+
+In interactive mode (WebSocket run), it awaits a per-run `asyncio.Event` stored on the `StreamingCallbackHandler`; the WebSocket handler sets this event when the client sends a `hitl_response` message. 
+
+In skip mode (MCP call, sync endpoint, or test), no event exists and the node auto-approves all ranked claims immediately. 
+
+A 5-minute timeout auto-approves if the user does not respond. Custom claims added in the modal are assigned new UUIDs and validated (empty text and claims over 500 characters are rejected).
 
 ---
 

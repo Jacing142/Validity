@@ -1,14 +1,14 @@
 # Validity
 
-Validity cuts through confirmation bias by checking every atomic claim in a block of text for evidence both supporting and contradicting it.
+The internet is an echo chamber: whatever you look for, you will find. 
+
+Validity cuts through confirmation bias by checking  atomic claims for evidence both supporting and contradicting it.
 
 ## Demo
 
 ![Validity Demo](Product%20Gif.gif)
 
 ## What it does
-
-The internet is an echo chamber: whatever you look for, you will find. 
 
 Validity extracts each atomic claim from the text you paste, then fires adversarial search queries designed to find proof for and against each one. The output is a structured verdict per claim, sources tiered by credibility (high, mid, or low), and full agent reasoning visible in real time as each pipeline node fires.
 

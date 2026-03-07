@@ -8,7 +8,11 @@ Validity cuts through confirmation bias by checking every atomic claim in a bloc
 
 ## What it does
 
-The internet is an echo chamber: whatever you look for, you will find. Validity extracts each atomic claim from the text you paste, then fires adversarial search queries designed to find proof for and against each one. The output is a structured verdict per claim, sources tiered by credibility (high, mid, or low), and the full agent reasoning visible in real time as each pipeline node fires. For a full technical deep-dive into architecture decisions, build phases, and iteration notes, see SPEC.md.
+The internet is an echo chamber: whatever you look for, you will find. 
+
+Validity extracts each atomic claim from the text you paste, then fires adversarial search queries designed to find proof for and against each one. The output is a structured verdict per claim, sources tiered by credibility (high, mid, or low), and full agent reasoning visible in real time as each pipeline node fires.
+
+For a full technical deep-dive into architecture decisions, build phases, and iteration notes, see SPEC.md.
 
 ## Tech stack
 
@@ -44,11 +48,11 @@ graph TD
 
 ## Key engineering decisions
 
-**HITL as a named agentic pattern.** Human-in-the-loop at the claim review step solves a real problem: an LLM decomposing a paragraph will extract 8 to 15 claims, many of them trivial. Verifying all of them wastes API calls, tokens, and attention. HITL pauses the pipeline after ranking, shows the user a prioritised list, and lets them approve, remove, or add claims before the search budget is committed. This is the standard pattern for agentic claim explosion, not a UX courtesy feature.
+**HITL as a named agentic pattern.** Human-in-the-loop at the claim review step solves a real problem: an LLM decomposing a paragraph will extract 8 to 15 claims, many of them trivial. Verifying all of them wastes API calls, tokens, and attention. HITL pauses the pipeline after ranking, shows the user a prioritised list, and lets them approve, remove, or add claims before the search budget is committed.
 
 **WebSocket streaming, push not polling.** The frontend opens a single WebSocket connection at run start and receives all events as they arrive. Every LangGraph node emits structured events via a custom callback handler, and FastAPI pushes them directly to the connected client. No polling, no SSE complexity, no client-side timers. The result is a live stream of agent reasoning that updates in real time with no round-trip overhead.
 
-**asyncio.Event over LangGraph native interrupt.** The graph is compiled without a LangGraph MemorySaver checkpointer and invoked with `ainvoke()` in a single call. Using LangGraph's native `interrupt()` pattern would require adding a MemorySaver, catching `GraphInterrupt`, and re-invoking with `Command(resume=...)`, which would have required significant refactoring of the Phase 2 invocation model. Instead, the HITL node stores a per-run `asyncio.Event` on the callback handler, awaits it, and the WebSocket handler sets it when the client sends claim approval. Both run in the same asyncio event loop: standard asyncio coordination, no checkpointing required.
+**asyncio.Event over LangGraph native interrupt.** The graph is compiled without a LangGraph MemorySaver checkpointer and invoked with `ainvoke()` in a single call. Using LangGraph's native `interrupt()` pattern would require adding a MemorySaver, catching `GraphInterrupt`, and re-invoking with `Command(resume=...)`, which would have required significant refactoring of the existing invocation model. Instead, the HITL node stores a per-run `asyncio.Event` on the callback handler, awaits it, and the WebSocket handler sets it when the client sends claim approval. Both run in the same asyncio event loop: standard asyncio coordination, no checkpointing required.
 
 **Configurable providers via .env.** Every LLM call routes through `get_llm(complexity="high"|"standard")`. High-complexity nodes (decompose, weigh evidence) use the capable model; structured lower-complexity nodes (rank, query gen, verdict, synthesize) use the fast model. Switching from OpenAI to Anthropic is a single `.env` change: `LLM_PROVIDER=anthropic` maps high to Claude Sonnet 4 and standard to Claude Haiku 4.5. Search is abstracted the same way across Serper, Tavily, and You.com.
 

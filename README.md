@@ -4,7 +4,7 @@ Validity cuts through confirmation bias by checking every atomic claim in a bloc
 
 ## Demo
 
-![Validity Demo](assets/demo.gif)
+![Validity Demo](Product Gif.gif)
 
 ## What it does
 

@@ -7,7 +7,7 @@ Three tools:
     get_run                   — Retrieve a previous run's verdict from the in-process store
 
 Entry point:
-    python -m mcp.server
+    python mcp/server.py
 
 Note: get_run only works for runs started in this same MCP server process.
       Runs initiated via the FastAPI web server are not accessible here.

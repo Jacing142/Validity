@@ -8,7 +8,7 @@ It demonstrates end-to-end agentic AI engineering: LangGraph orchestration, HITL
 
 ## Built with Claude Code
 
-The entire build was executed using Claude Code. Total time was approximately 5 hours 10 minutes across planning and 5 build phases. Architectural and product decisions, including the HITL implementation strategy, the dual-model LLM pattern, and the asyncio.Event coordination approach, were made collaboratively during the session.
+I designed the architecture. Claude Code planned the build sprints and wrote the implementation. Total time was approximately 5 hours 10 minutes across planning and 5 build phases. The architectural decisions included the HITL implementation strategy, the dual-model LLM pattern, and the asyncio.Event coordination approach.
 
 ## Hours breakdown
 
@@ -17,7 +17,7 @@ The entire build was executed using Claude Code. Total time was approximately 5 
 | Planning | Architecture, stack decisions, product scoping | 1h 30m |
 | Phase 1 | Backend pipeline, LangGraph graph, all nodes, FastAPI | 20m |
 | Phase 2 | WebSocket streaming and Vite/React frontend | 20m |
-| Phase 3 | HITL, LangGraph interrupt, ClaimModal wizard | 40m |
+| Phase 3 | HITL (asyncio.Event pause), ClaimModal wizard | 40m |
 | Phase 4 | MCP server, Docker Compose, initial docs | 20m |
 | Phase 5 | Iterations, prompt engineering, bug fixes, optimizations | 2h |
 | **Total** | | **5h 10m** |
@@ -28,7 +28,7 @@ The entire build was executed using Claude Code. Total time was approximately 5 
 
 **FastAPI.** FastAPI was chosen for its native async support and first-class WebSocket handling. The pipeline is async throughout: LangGraph runs with `ainvoke()`, search queries execute with `asyncio.gather()`, and HITL coordination uses `asyncio.Event`. A synchronous framework would have required thread-pool workarounds for all of this. FastAPI's automatic OpenAPI generation also provides REST endpoint documentation at no additional cost.
 
-**Vite and React.** Vite gives near-instant dev server startup and hot module replacement, which matters when iterating on the frontend during a timed build. React was chosen over a lighter alternative because the UI has meaningful stateful complexity: WebSocket connection lifecycle, streaming event ingestion, HITL modal state (claim approval, removal, and addition), and a two-panel layout with independent update streams. Simpler frameworks would have required manual state management that React handles naturally.
+**Vite and React.** Vite gives near-instant dev server startup and hot module replacement, which matters when iterating on the frontend during a timed build. React was chosen over a lighter alternative because the UI has meaningful stateful complexity: WebSocket connection lifecycle, streaming event ingestion, HITL modal state (claim approval, removal, and choice of rewording), and a two-panel layout with independent update streams. Simpler frameworks would have required manual state management that React handles naturally.
 
 **ChromaDB (considered, removed).** ChromaDB was initially considered to cache search results and source embeddings across runs, supporting a RAG-style evidence retrieval layer. It was removed because the added complexity (embedding pipeline, vector store management, cache invalidation) was not justified for the v1 scope, where each run is independent and web search results are fetched fresh. The architecture is cleaner without it; document upload and RAG are explicitly in the V2 roadmap.
 
@@ -44,7 +44,7 @@ The entire build was executed using Claude Code. Total time was approximately 5 
 
 **Phase 2: WebSocket streaming and frontend.** A WebSocket endpoint was added to FastAPI, and a custom `StreamingCallbackHandler` was built to capture node events and push them to connected clients. The React frontend was scaffolded with Vite: InputPanel for text submission, ThoughtPanel for the live event stream, and VerdictPanel for the structured results. The checkpoint was a working two-panel web app where pasting text and submitting produced a live stream of agent events followed by a rendered verdict.
 
-**Phase 3: HITL.** The HITL node was added to the graph between rank and query generation. The node emits a `hitl_request` event over WebSocket, awaits an `asyncio.Event`, and resumes when the WebSocket handler sets it on receipt of a `hitl_response` from the client. The ClaimModal component was built in React: a step-by-step wizard for approving, removing, and adding claims before the pipeline continues. The checkpoint was an end-to-end interactive run with a visible pause, claim review, and pipeline resumption.
+**Phase 3: HITL.** The HITL node was added to the graph between rank and query generation. The node emits a `hitl_request` event over WebSocket, awaits an `asyncio.Event`, and resumes when the WebSocket handler sets it on receipt of a `hitl_response` from the client. The ClaimModal component was built in React: a step-by-step wizard for approving or removing claims and choosing a rewording for subjective ones before the pipeline continues. The checkpoint was an end-to-end interactive run with a visible pause, claim review, and pipeline resumption.
 
 **Phase 4: MCP server, Docker Compose, initial docs.** The FastMCP server was built exposing three tools: `verify_text`, `verify_text_interactive`, and `get_run`. Docker Compose was configured with backend and frontend services. An `.env.example` was documented with all provider options. Initial README and SPEC were drafted. The checkpoint was a fully deployable, MCP-integrated system that could be started with `docker compose up` and used from Claude Desktop.
 
@@ -96,7 +96,7 @@ The entire build was executed using Claude Code. Total time was approximately 5 
 
 ### HITL
 
-**Purpose:** Pause the pipeline, emit ranked claims to the connected frontend for user review, and wait until the user approves, removes, or adds claims and confirms.
+**Purpose:** Pause the pipeline, emit ranked claims to the connected frontend for user review, and wait until the user approves, removes, or rewords claims and confirms.
 
 **Inputs:** `ranked_claims`
 
@@ -110,7 +110,7 @@ In interactive mode (WebSocket run), it awaits a per-run `asyncio.Event` stored 
 
 In skip mode (MCP call, sync endpoint, or test), no event exists and the node auto-approves all ranked claims immediately. 
 
-A 5-minute timeout auto-approves if the user does not respond. Custom claims added in the modal are assigned new UUIDs and validated (empty text and claims over 500 characters are rejected).
+A 5-minute timeout stops the run without searching if the user does not respond. Claims sent back by the client without an ID are assigned new UUIDs and validated (empty text and claims over 500 characters are rejected).
 
 ---
 
@@ -150,7 +150,7 @@ A 5-minute timeout auto-approves if the user does not respond. Custom claims add
 
 **Outputs:** `search_results` (all results tagged with claim_id, query_intent, and a null source_tier placeholder)
 
-**LLM call:** No. Uses the configured search API (Serper, Tavily, or You.com).
+**LLM call:** No. Uses the configured search API (Serper; Tavily and You.com are stubs).
 
 **Key implementation note:** All queries are fired in parallel with `asyncio.gather()`. A per-claim URL deduplication pass runs after collection to prevent the same source appearing multiple times for the same claim across different query variants. Individual query failures are caught and logged without stopping the batch.
 
@@ -192,7 +192,7 @@ A 5-minute timeout auto-approves if the user does not respond. Custom claims add
 
 **Outputs:** `claim_verdicts` (one verdict per claim with confidence score and split supporting/contradicting evidence lists)
 
-**LLM call:** Yes, `complexity="standard"`. The verdict assignment uses a structured prompt with 8 explicit rules applied in priority order: tier-level contradictions trigger "contradicted" first; support counts then determine high, medium, or low.
+**LLM call:** Yes, `complexity="standard"`. The verdict assignment uses a structured prompt with 7 explicit rules applied in priority order: tier-level contradictions trigger "contradicted" first; support counts then determine high, medium, or low.
 
 **Key implementation note:** Verdict assignment runs parallel per claim. The prompt was rewritten in Phase 5 after discovering the original version returned "low" for claims with 8 supporting sources but no contradictions. The explicit rule "5 or more SUPPORTING sources and 0 contradicting sources = high" and "do NOT factor in source tier when determining high vs medium vs low" were added to fix this.
 
@@ -206,7 +206,7 @@ A 5-minute timeout auto-approves if the user does not respond. Custom claims add
 
 **Outputs:** `overall_verdict` (verdict string, summary, counts by verdict type, and the full claim_verdicts list)
 
-**LLM call:** Yes, `complexity="standard"`. The synthesis prompt accounts for claim importance scores from the rank node when weighting the overall assessment.
+**LLM call:** Yes, `complexity="standard"`. Importance scores from the rank node are passed to the synthesis prompt alongside each verdict.
 
 **Key implementation note:** A heuristic fallback is implemented for the case where the LLM call fails: if contradicted_count > 0 the overall verdict is "mixed"; if high_count is 70% or more of total it is "high"; if low_count is 50% or more it is "low"; otherwise "medium". This ensures the pipeline always produces a usable result even under LLM failure.
 
@@ -216,7 +216,7 @@ A 5-minute timeout auto-approves if the user does not respond. Custom claims add
 
 **Weigh node false contradictions on numerical approximations.** During Phase 5 testing with real inputs, the weigh node was flagging sources as CONTRADICTS when they cited rounded figures. A source saying "approximately 365 days" was being called a contradiction of "365.25 days". The fix was a detailed set of rules added to the system prompt: approximations within 10% are SUPPORTS, rounded date figures are SUPPORTS, and CONTRADICTS requires clear, direct disagreement. The prompt explicitly lists non-examples ("Water boils at 100 degrees" as a source for a "100°C" claim = SUPPORTS) to anchor the model's behavior on the boundary cases.
 
-**Verdict node returning LOW for claims with 8 supporting sources.** The original verdict prompt was underspecified: it described verdicts qualitatively without numeric thresholds. Under real inputs, the model was returning "low" for claims with many supporting sources because the sources were low-tier (general .com domains). The fix was a complete prompt rewrite with an explicit 8-rule priority sequence. The key additions: source tier is irrelevant when determining high, medium, or low (it only matters for contradiction rules), and 3 or more supporting sources with 0 contradictions is "high."
+**Verdict node returning LOW for claims with 8 supporting sources.** The original verdict prompt was underspecified: it described verdicts qualitatively without numeric thresholds. Under real inputs, the model was returning "low" for claims with many supporting sources because the sources were low-tier (general .com domains). The fix was a complete prompt rewrite with an explicit 7-rule priority sequence. The key additions: source tier is irrelevant when determining high, medium, or low (it only matters for contradiction rules), and 3 or more supporting sources with 0 contradictions is "high."
 
 **HITL asyncio.Event vs LangGraph native interrupt.** The Phase 3 HITL implementation required a choice between two approaches. LangGraph's native interrupt pattern (MemorySaver checkpointer, `GraphInterrupt` exception, `Command(resume=...)` re-invocation) would have required refactoring the Phase 2 invocation model, which used `ainvoke()` in a single async call. The `asyncio.Event` approach was chosen because it required no changes to the existing invocation pattern: the event is stored on the per-run callback handler, awaited inside the HITL node, and set by the WebSocket handler when the client responds. Both run in the same event loop. The tradeoff is that this approach does not support multi-process or distributed deployment of the pipeline, which is outside the v1 scope.
 

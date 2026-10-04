@@ -87,11 +87,13 @@ export function useVerify() {
         setEvents((prev) => [...prev, event])
         setVerdict(event.data || null)
         setStatus('completed')
+        setHitlClaims(null)
         ws.close()
       } else if (event.type === 'pipeline_error') {
         setEvents((prev) => [...prev, event])
         setError(event.detail || 'Unknown pipeline error')
         setStatus('error')
+        setHitlClaims(null)
         ws.close()
       } else if (event.type === 'hitl_request') {
         // Phase 3: pipeline paused — show HITL modal.

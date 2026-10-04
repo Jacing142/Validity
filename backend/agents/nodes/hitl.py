@@ -25,7 +25,7 @@ from backend.agents.callbacks import get as get_callback
 
 logger = logging.getLogger(__name__)
 
-# If user takes longer than this, auto-approve all ranked claims and continue.
+# If the user takes longer than this, stop the run without searching.
 HITL_TIMEOUT_SECONDS = 300  # 5 minutes
 
 
@@ -64,15 +64,14 @@ async def hitl_node(state: VerificationState) -> dict:
         logger.info(f"[{run_id}] [hitl] Resumed — user approved {len(approved_claims)} claims")
     except asyncio.TimeoutError:
         logger.warning(
-            f"[{run_id}] [hitl] Timed out after {HITL_TIMEOUT_SECONDS}s "
-            f"— auto-approving all {len(ranked_claims)} ranked claims"
+            f"[{run_id}] [hitl] Timed out after {HITL_TIMEOUT_SECONDS}s, stopping without searching"
         )
-        approved_claims = ranked_claims
+        approved_claims = []
         await cb.aemit({
             "type": "node_event",
             "node": "hitl",
             "status": "completed",
-            "detail": "Review timed out — auto-approving all ranked claims and continuing...",
+            "detail": "Review timed out. Stopping without searching.",
         })
 
     # --- Validate / normalise approved claims ---

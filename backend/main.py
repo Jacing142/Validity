@@ -293,7 +293,7 @@ async def stream_run(websocket: WebSocket, run_id: str):
                 raw = await websocket.receive_text()
             except WebSocketDisconnect:
                 logger.info(f"[{run_id}] WebSocket client disconnected")
-                # If pipeline is paused at HITL, it will auto-approve after timeout.
+                # If paused at review, the run stops after the timeout.
                 return
             except Exception as exc:
                 logger.warning(f"[{run_id}] WebSocket receive error: {exc}")

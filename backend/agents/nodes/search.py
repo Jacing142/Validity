@@ -121,6 +121,19 @@ async def search_node(state: VerificationState) -> dict:
 
         all_results = await _execute_all_queries(search_client, queries, num_results, cb)
 
+        if not all_results:
+            logger.warning(f"[{run_id}] [search] All queries returned no results")
+            if cb:
+                await cb.aemit({
+                    "type": "node_event",
+                    "node": "search",
+                    "status": "error",
+                    "detail": "Search returned no results. Check the search provider and API key.",
+                })
+            errors = list(state.get("errors", []))
+            errors.append("search: no results returned. Check SEARCH_PROVIDER and SEARCH_API_KEY.")
+            return {"search_results": [], "errors": errors}
+
         # Deduplicate by URL within each claim
         by_claim: dict[str, list[dict]] = defaultdict(list)
         for r in all_results:

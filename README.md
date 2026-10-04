@@ -1,8 +1,10 @@
 # Validity
 
-The internet is an echo chamber: whatever you look for, you will find. 
+![CI](https://github.com/Jacing142/Validity/actions/workflows/ci.yml/badge.svg)
 
-Validity cuts through confirmation bias by checking  atomic claims for evidence both supporting and contradicting it.
+Search for almost any claim and you will find a page that agrees with it. Validity checks each claim in a passage by searching for evidence against it as well as for it, then rates how credible each source is.
+
+The engineering problem: an agent pipeline that pauses part-way through so a person can review the claims before any searching starts, then resumes, while every step streams live to the browser. The choices behind that are under Key engineering decisions.
 
 ## Demo
 
@@ -14,13 +16,15 @@ Validity extracts each atomic claim from the text you paste, then fires adversar
 
 For a full technical deep-dive into architecture decisions, build phases, and iteration notes, see SPEC.md.
 
+Built with Claude Code: I designed the architecture; Claude Code planned the build sprints and wrote the implementation.
+
 ## Tech stack
 
 | Layer | Choice |
 |-------|--------|
 | Orchestration | LangGraph |
 | LLM framework | LangChain |
-| Search APIs | Serper / Tavily / You.com (configurable) |
+| Search API | Serper (behind a provider interface) |
 | LLM providers | OpenAI / Anthropic (configurable) |
 | Backend | FastAPI |
 | Frontend | Vite + React |
@@ -48,20 +52,20 @@ graph TD
 
 ## Key engineering decisions
 
-**HITL as a named agentic pattern.** Human-in-the-loop at the claim review step solves a real problem: an LLM decomposing a paragraph will extract 8 to 15 claims, many of them trivial. Verifying all of them wastes API calls, tokens, and attention. HITL pauses the pipeline after ranking, shows the user a prioritised list, and lets them approve, remove, or add claims before the search budget is committed.
+**HITL as a named agentic pattern.** Human-in-the-loop at the claim review step solves a real problem: an LLM decomposing a paragraph extracts up to 8 claims, often several of them trivial. Verifying all of them wastes API calls, tokens, and attention. HITL pauses the pipeline after ranking, shows the user a prioritised list, and lets them approve or remove claims, or pick a reworded version of a subjective one, before the search budget is committed. If nobody responds within 5 minutes, the run stops without searching.
 
 **WebSocket streaming, push not polling.** The frontend opens a single WebSocket connection at run start and receives all events as they arrive. Every LangGraph node emits structured events via a custom callback handler, and FastAPI pushes them directly to the connected client. No polling, no SSE complexity, no client-side timers. The result is a live stream of agent reasoning that updates in real time with no round-trip overhead.
 
 **asyncio.Event over LangGraph native interrupt.** The graph is compiled without a LangGraph MemorySaver checkpointer and invoked with `ainvoke()` in a single call. Using LangGraph's native `interrupt()` pattern would require adding a MemorySaver, catching `GraphInterrupt`, and re-invoking with `Command(resume=...)`, which would have required significant refactoring of the existing invocation model. Instead, the HITL node stores a per-run `asyncio.Event` on the callback handler, awaits it, and the WebSocket handler sets it when the client sends claim approval. Both run in the same asyncio event loop: standard asyncio coordination, no checkpointing required.
 
-**Configurable providers via .env.** Every LLM call routes through `get_llm(complexity="high"|"standard")`. High-complexity nodes (decompose, weigh evidence) use the capable model; structured lower-complexity nodes (rank, query gen, verdict, synthesize) use the fast model. Switching from OpenAI to Anthropic is a single `.env` change: `LLM_PROVIDER=anthropic` maps high to Claude Sonnet 4 and standard to Claude Haiku 4.5. Search is abstracted the same way across Serper, Tavily, and You.com.
+**Configurable providers via .env.** Every LLM call routes through `get_llm(complexity="high"|"standard")`. High-complexity nodes (decompose, weigh evidence) use the capable model; structured lower-complexity nodes (rank, query gen, verdict, synthesize) use the fast model. Switching to Anthropic means setting `LLM_PROVIDER=anthropic`, the API key, and both model names in `.env` (for example `claude-sonnet-4-6` and `claude-haiku-4-5-20251001`). Search sits behind a small provider interface (`backend/search/base.py`). Only Serper is implemented; Tavily and You.com are stubs, and adding one means writing a client for that interface.
 
 ## How to run
 
 ### Docker (recommended)
 
 ```bash
-git clone <repo-url> validity
+git clone https://github.com/Jacing142/Validity.git validity
 cd validity
 cp .env.example .env
 # Edit .env: set LLM_API_KEY and SEARCH_API_KEY at minimum
@@ -88,14 +92,16 @@ npm run dev
 
 Open http://localhost:5173. Vite proxies `/api` to the backend automatically.
 
+No API keys? Set `LLM_PROVIDER=mock` and `SEARCH_PROVIDER=mock` in `.env` to run the whole pipeline on canned responses.
+
 ### Required .env fields
 
 ```bash
-LLM_PROVIDER=openai                    # openai | anthropic
+LLM_PROVIDER=openai                    # openai | anthropic | mock
 LLM_API_KEY=sk-...
 LLM_MODEL_COMPLEX=gpt-4o              # Decompose and evidence weighing
 LLM_MODEL_STANDARD=gpt-4o-mini        # Rank, query gen, verdict, synthesis
-SEARCH_PROVIDER=serper                 # serper | tavily | you
+SEARCH_PROVIDER=serper                 # serper | mock
 SEARCH_API_KEY=...
 MAX_CLAIMS=5
 MAX_SOURCES_PER_CLAIM=5
@@ -139,7 +145,9 @@ Restart Claude Desktop. Three tools will appear:
 - Subjective claim extraction is inconsistent: the decompose node extracts all statements including opinions, and the reformulate node attempts to make subjective ones more searchable, but quality varies significantly with input phrasing.
 - Source tier classification uses domain heuristics plus an LLM fallback for unknown domains. It is directionally correct but not infallible: a `.edu` personal blog and a peer-reviewed journal receive the same tier; a quality `.com` investigative piece may rank low.
 - The run store is in-memory and lost on restart. Runs from the web UI and the MCP server are not shared.
-- Input is capped at 5000 characters.
+- Web input must be 50 to 5,000 characters. The MCP tools do not enforce this cap.
+- Confidence scores are bands set by the verdict prompt, not calibrated probabilities. There is no labelled evaluation set yet.
+- Search snippets go into prompts as data with no injection defence beyond JSON encoding. The worst case is a wrong verdict; the pipeline takes no actions.
 
 ## V2 roadmap
 
